@@ -22,6 +22,28 @@ from models.transformer import create_model
 from utils.vocabulary import Vocabulary
 
 
+def get_training_config(model_size='tiny', num_epochs=50, batch_size=None):
+    """Helper to get training config for different model sizes."""
+
+    # Auto-adjust batch size based on model
+    if batch_size is None:
+        batch_size = {
+            'tiny': 64,
+            'small': 32,
+            'base': 16,
+            'large': 8,
+        }[model_size]
+
+    return TrainingConfig(
+        model_size=model_size,
+        batch_size=batch_size,
+        num_epochs=num_epochs,
+        learning_rate=1e-4,
+        warmup_steps=2000,
+        checkpoint_dir='checkpoints',
+    )
+
+
 @dataclass
 class TrainingConfig:
     """Training configuration."""
@@ -30,11 +52,11 @@ class TrainingConfig:
     vocab_size: int = 663
     
     # Training
-    batch_size: int = 32
+    batch_size: int = 64  # Larger batches for larger dataset
     num_epochs: int = 50
     learning_rate: float = 1e-4
     weight_decay: float = 0.01
-    warmup_steps: int = 1000
+    warmup_steps: int = 2000  # More warmup for larger dataset
     max_grad_norm: float = 1.0
     
     # Data
@@ -318,6 +340,17 @@ def main():
         const="latest",
         help="Resume from checkpoint path or 'latest' in checkpoint_dir"
     )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        help="Total number of epochs to train (overrides config)"
+    )
+    parser.add_argument(
+        "--model-size",
+        default="tiny",
+        choices=["tiny", "small", "base", "large"],
+        help="Model size preset"
+    )
     args = parser.parse_args()
 
     def resolve_checkpoint_path(resume_arg: str, checkpoint_dir: Path) -> str:
@@ -333,12 +366,9 @@ def main():
         return resume_arg
 
     # Configuration
-    config = TrainingConfig(
-        model_size='base',
-        batch_size=32,
-        num_epochs=50,
-        learning_rate=1e-4,
-        vocab_size=663,  # Will be updated from vocab file
+    config = get_training_config(
+        model_size=args.model_size,
+        num_epochs=args.num_epochs or 50,
     )
     
     # Load vocabulary
@@ -359,6 +389,11 @@ def main():
             config.vocab_size = ckpt_config['vocab_size']
         if ckpt_config.get('max_seq_len'):
             config.max_seq_len = ckpt_config['max_seq_len']
+        if ckpt_config.get('num_epochs') and args.num_epochs is None:
+            config.num_epochs = ckpt_config['num_epochs']
+
+    if args.num_epochs is not None:
+        config.num_epochs = args.num_epochs
 
     # Create datasets
     print("\nLoading datasets...")
