@@ -578,7 +578,7 @@ MIT License - see [LICENSE](LICENSE) file
 ## 📞 Contact
 
 - **GitHub Issues:** [github.com/yourusername/symbolic-transformers/issues](https://github.com/yourusername/symbolic-transformers/issues)
-- **Twitter:** [@yourusername](https://x.com/_trippitytrip)
+- **X:** [@yourusername](https://x.com/_trippitytrip)
 
 ---
 
