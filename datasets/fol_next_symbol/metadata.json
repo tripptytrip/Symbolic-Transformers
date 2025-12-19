@@ -1,0 +1,23 @@
+{
+  "vocab_path": "unified_vocabulary.json",
+  "vocab_size": 662,
+  "config": {
+    "max_depth": 3,
+    "max_variables": 5,
+    "max_predicates": 5
+  },
+  "splits": {
+    "train": {
+      "num_formulas": 1000,
+      "num_samples": 14119
+    },
+    "val": {
+      "num_formulas": 200,
+      "num_samples": 2837
+    },
+    "test": {
+      "num_formulas": 200,
+      "num_samples": 2791
+    }
+  }
+}

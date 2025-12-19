@@ -1,0 +1,18 @@
+# Requirements for FOL Symbolic Transformer
+# Optimized for AMD Radeon GPU with ROCm
+
+# Core ML frameworks
+torch>=2.0.0  # Will use ROCm backend on AMD
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Data handling
+pandas>=2.0.0
+
+# Utilities
+tqdm>=4.65.0
+tensorboard>=2.13.0
+
+# Development
+pytest>=7.3.0
+black>=23.3.0

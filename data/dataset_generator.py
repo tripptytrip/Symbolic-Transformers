@@ -1,0 +1,403 @@
+"""
+FOL Formula Dataset Generator
+Generates training data for next-symbol prediction on FOL formulas.
+"""
+
+import random
+import json
+from pathlib import Path
+from typing import List, Tuple, Dict, Optional
+from dataclasses import dataclass
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+
+from utils.vocabulary import Vocabulary
+
+
+@dataclass
+class FormulaConfig:
+    """Configuration for formula generation."""
+    max_depth: int = 3
+    max_variables: int = 5
+    max_predicates: int = 5
+    max_functions: int = 3
+    use_quantifiers: bool = True
+    use_connectives: bool = True
+    use_equality: bool = True
+    use_arithmetic: bool = False  # For future extension
+
+
+class FOLFormulaGenerator:
+    """
+    Generate random well-formed FOL formulas for training.
+    
+    Generates formulas with increasing complexity:
+    - Level 1: Atomic predicates P(x)
+    - Level 2: Simple connectives P(x) ∧ Q(x)
+    - Level 3: Quantifiers ∀x P(x)
+    - Level 4: Nested structures ∀x(P(x) → Q(x))
+    """
+    
+    def __init__(self, vocab: Vocabulary, config: FormulaConfig):
+        self.vocab = vocab
+        self.config = config
+        
+        # Get token IDs for generation
+        self.connectives = ['NOT', 'AND', 'OR', 'IMPLIES', 'IFF']
+        self.quantifiers = ['FORALL', 'EXISTS']
+        self.relations = ['EQUALS', 'NOT_EQUALS']
+        
+        self.connective_ids = [vocab.encode_label(c) for c in self.connectives]
+        self.quantifier_ids = [vocab.encode_label(q) for q in self.quantifiers]
+        
+        # Structural tokens
+        self.lparen = vocab.encode_label('LPAREN')
+        self.rparen = vocab.encode_label('RPAREN')
+        self.comma = vocab.encode_label('COMMA')
+        
+        # Category tokens
+        self.var_token = vocab.compositional_tokens['VAR']
+        self.pred_token = vocab.compositional_tokens['PRED']
+        self.func_token = vocab.compositional_tokens.get('FUNC')
+    
+    def generate_variable(self, var_idx: Optional[int] = None) -> List[int]:
+        """Generate variable token sequence VAR n."""
+        if var_idx is None:
+            var_idx = random.randint(0, self.config.max_variables - 1)
+        return self.vocab.encode_compositional('VAR', var_idx)
+    
+    def generate_predicate(
+        self, 
+        pred_idx: Optional[int] = None,
+        arity: int = 1,
+        var_indices: Optional[List[int]] = None
+    ) -> List[int]:
+        """
+        Generate predicate token sequence PRED n (VAR m1, VAR m2, ...).
+        
+        Args:
+            pred_idx: Predicate index (random if None)
+            arity: Number of arguments
+            var_indices: Specific variable indices (random if None)
+        """
+        if pred_idx is None:
+            pred_idx = random.randint(0, self.config.max_predicates - 1)
+        
+        tokens = self.vocab.encode_compositional('PRED', pred_idx)
+        tokens.append(self.lparen)
+        
+        if var_indices is None:
+            var_indices = [random.randint(0, self.config.max_variables - 1) 
+                          for _ in range(arity)]
+        
+        for i, var_idx in enumerate(var_indices):
+            tokens.extend(self.generate_variable(var_idx))
+            if i < len(var_indices) - 1:
+                tokens.append(self.comma)
+        
+        tokens.append(self.rparen)
+        return tokens
+    
+    def generate_atomic(self, bound_vars: Optional[List[int]] = None) -> List[int]:
+        """
+        Generate atomic formula (predicate or equality).
+        
+        Args:
+            bound_vars: List of variable indices currently in scope
+        """
+        if self.config.use_equality and random.random() < 0.3:
+            # Generate equality: VAR n = VAR m
+            if bound_vars and len(bound_vars) >= 2:
+                var1, var2 = random.sample(bound_vars, 2)
+            else:
+                var1 = random.randint(0, self.config.max_variables - 1)
+                var2 = random.randint(0, self.config.max_variables - 1)
+            
+            tokens = self.generate_variable(var1)
+            tokens.append(self.vocab.encode_label('EQUALS'))
+            tokens.extend(self.generate_variable(var2))
+            return tokens
+        else:
+            # Generate predicate
+            arity = random.randint(1, 2)  # Mostly unary or binary
+            
+            if bound_vars:
+                var_indices = [random.choice(bound_vars) for _ in range(arity)]
+            else:
+                var_indices = None
+            
+            return self.generate_predicate(arity=arity, var_indices=var_indices)
+    
+    def generate_formula(
+        self, 
+        depth: int = 0, 
+        bound_vars: Optional[List[int]] = None
+    ) -> List[int]:
+        """
+        Recursively generate formula with given maximum depth.
+        
+        Args:
+            depth: Current nesting depth
+            bound_vars: Variables currently bound by quantifiers
+        """
+        if bound_vars is None:
+            bound_vars = []
+        
+        # Base case: generate atomic formula
+        if depth >= self.config.max_depth or random.random() < 0.3:
+            return self.generate_atomic(bound_vars)
+        
+        # Recursive cases
+        formula_type = random.choice(['quantifier', 'connective'])
+        
+        if formula_type == 'quantifier' and self.config.use_quantifiers:
+            # Generate quantified formula: ∀x φ or ∃x φ
+            quantifier = random.choice(self.quantifiers)
+            var_idx = random.randint(0, self.config.max_variables - 1)
+            
+            tokens = [self.vocab.encode_label(quantifier)]
+            tokens.extend(self.generate_variable(var_idx))
+            
+            # Generate body with this variable bound
+            new_bound = bound_vars + [var_idx]
+            body = self.generate_formula(depth + 1, new_bound)
+            
+            tokens.extend(body)
+            return tokens
+        
+        elif formula_type == 'connective' and self.config.use_connectives:
+            # Generate compound formula with connective
+            connective = random.choice(self.connectives)
+            
+            if connective == 'NOT':
+                # Unary: ¬φ
+                tokens = [self.vocab.encode_label('NOT')]
+                subformula = self.generate_formula(depth + 1, bound_vars)
+                tokens.extend(subformula)
+                return tokens
+            else:
+                # Binary: (φ ∧ ψ), (φ → ψ), etc.
+                tokens = [self.lparen]
+                left = self.generate_formula(depth + 1, bound_vars)
+                tokens.extend(left)
+                tokens.append(self.vocab.encode_label(connective))
+                right = self.generate_formula(depth + 1, bound_vars)
+                tokens.extend(right)
+                tokens.append(self.rparen)
+                return tokens
+        
+        # Fallback to atomic
+        return self.generate_atomic(bound_vars)
+    
+    def generate_batch(self, n_samples: int, complexity: int = 2) -> List[List[int]]:
+        """
+        Generate batch of formulas.
+        
+        Args:
+            n_samples: Number of formulas to generate
+            complexity: 1-5 scale (affects depth)
+        """
+        # Map complexity to depth
+        depth_map = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
+        max_depth = depth_map.get(complexity, 2)
+        
+        old_depth = self.config.max_depth
+        self.config.max_depth = max_depth
+        
+        formulas = []
+        for _ in range(n_samples):
+            formula = self.generate_formula()
+            formulas.append(formula)
+        
+        self.config.max_depth = old_depth
+        return formulas
+
+
+class NextSymbolDataset:
+    """
+    Dataset for next-symbol prediction task.
+    
+    Given a formula prefix, predict the next token.
+    Example: [FORALL, VAR, 1, PRED] → next token should be a predicate index
+    """
+    
+    def __init__(
+        self, 
+        formulas: List[List[int]], 
+        max_seq_len: int = 128
+    ):
+        """
+        Create dataset from formula token sequences.
+        
+        Args:
+            formulas: List of token sequences
+            max_seq_len: Maximum sequence length
+        """
+        self.formulas = formulas
+        self.max_seq_len = max_seq_len
+        self.samples = []
+        
+        # Create training samples: (context, target) pairs
+        for formula in formulas:
+            # Create samples at each position
+            for i in range(1, min(len(formula), max_seq_len)):
+                context = formula[:i]
+                target = formula[i]
+                
+                self.samples.append({
+                    'context': context,
+                    'target': target,
+                    'formula_len': len(formula)
+                })
+    
+    def __len__(self) -> int:
+        return len(self.samples)
+    
+    def __getitem__(self, idx: int) -> Dict:
+        return self.samples[idx]
+    
+    def save(self, output_path: str):
+        """Save dataset to JSON."""
+        with open(output_path, 'w') as f:
+            json.dump({
+                'num_formulas': len(self.formulas),
+                'num_samples': len(self.samples),
+                'max_seq_len': self.max_seq_len,
+                'samples': self.samples
+            }, f, indent=2)
+        print(f"✓ Saved {len(self.samples)} samples to {output_path}")
+    
+    @staticmethod
+    def load(input_path: str) -> 'NextSymbolDataset':
+        """Load dataset from JSON."""
+        with open(input_path, 'r') as f:
+            data = json.load(f)
+        
+        # Reconstruct formulas from samples
+        # (This is approximate - we just need something for the constructor)
+        formulas = []
+        dataset = NextSymbolDataset.__new__(NextSymbolDataset)
+        dataset.formulas = formulas
+        dataset.max_seq_len = data['max_seq_len']
+        dataset.samples = data['samples']
+        
+        print(f"✓ Loaded {len(dataset.samples)} samples from {input_path}")
+        return dataset
+
+
+def generate_training_data(
+    vocab_path: str,
+    output_dir: str,
+    n_train: int = 10000,
+    n_val: int = 1000,
+    n_test: int = 1000,
+    complexity_distribution: Optional[List[Tuple[int, float]]] = None
+):
+    """
+    Generate complete training/validation/test datasets.
+    
+    Args:
+        vocab_path: Path to unified vocabulary
+        output_dir: Directory to save datasets
+        n_train: Number of training formulas
+        n_val: Number of validation formulas
+        n_test: Number of test formulas
+        complexity_distribution: List of (complexity, weight) tuples
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("="*60)
+    print("FOL DATASET GENERATION")
+    print("="*60)
+    
+    # Load vocabulary
+    vocab = Vocabulary(vocab_path)
+    
+    # Setup generator
+    config = FormulaConfig(
+        max_depth=3,
+        max_variables=5,
+        max_predicates=5,
+        use_quantifiers=True,
+        use_connectives=True,
+        use_equality=True
+    )
+    generator = FOLFormulaGenerator(vocab, config)
+    
+    # Default complexity distribution
+    if complexity_distribution is None:
+        complexity_distribution = [
+            (1, 0.2),  # 20% simple
+            (2, 0.4),  # 40% medium
+            (3, 0.3),  # 30% complex
+            (4, 0.1),  # 10% very complex
+        ]
+    
+    def generate_split(n_formulas: int, split_name: str) -> NextSymbolDataset:
+        """Generate one data split."""
+        print(f"\nGenerating {split_name} set ({n_formulas} formulas)...")
+        
+        formulas = []
+        for complexity, weight in complexity_distribution:
+            n_for_complexity = int(n_formulas * weight)
+            batch = generator.generate_batch(n_for_complexity, complexity)
+            formulas.extend(batch)
+            print(f"  Complexity {complexity}: {n_for_complexity} formulas")
+        
+        dataset = NextSymbolDataset(formulas, max_seq_len=128)
+        
+        output_path = output_dir / f"{split_name}.json"
+        dataset.save(str(output_path))
+        
+        return dataset
+    
+    # Generate splits
+    train_dataset = generate_split(n_train, 'train')
+    val_dataset = generate_split(n_val, 'val')
+    test_dataset = generate_split(n_test, 'test')
+    
+    # Save metadata
+    metadata = {
+        'vocab_path': vocab_path,
+        'vocab_size': vocab.vocab_size,
+        'config': {
+            'max_depth': config.max_depth,
+            'max_variables': config.max_variables,
+            'max_predicates': config.max_predicates,
+        },
+        'splits': {
+            'train': {'num_formulas': n_train, 'num_samples': len(train_dataset)},
+            'val': {'num_formulas': n_val, 'num_samples': len(val_dataset)},
+            'test': {'num_formulas': n_test, 'num_samples': len(test_dataset)},
+        }
+    }
+    
+    metadata_path = output_dir / 'metadata.json'
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print("\n" + "="*60)
+    print("✓ Dataset generation complete!")
+    print(f"✓ Output directory: {output_dir}")
+    print(f"✓ Train samples: {len(train_dataset)}")
+    print(f"✓ Val samples: {len(val_dataset)}")
+    print(f"✓ Test samples: {len(test_dataset)}")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    # Example usage
+    generate_training_data(
+        vocab_path="../../unified_vocabulary.json",
+        output_dir="../../datasets/fol_next_symbol",
+        n_train=1000,
+        n_val=200,
+        n_test=200,
+        complexity_distribution=[
+            (1, 0.2),  # 20% simple
+            (2, 0.4),  # 40% medium
+            (3, 0.3),  # 30% complex
+            (4, 0.1),  # 10% very complex
+        ]
+    )
