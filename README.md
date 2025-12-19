@@ -578,8 +578,7 @@ MIT License - see [LICENSE](LICENSE) file
 ## 📞 Contact
 
 - **GitHub Issues:** [github.com/yourusername/symbolic-transformers/issues](https://github.com/yourusername/symbolic-transformers/issues)
-- **Email:** your.email@example.com
-- **Twitter:** [@yourusername](https://twitter.com/yourusername)
+- **Twitter:** [@yourusername](https://x.com/_trippitytrip)
 
 ---
 
@@ -630,6 +629,6 @@ Available checkpoints:
 
 ---
 
-**Last Updated:** December 2024
+**Last Updated:** December 2025
 **Version:** 1.0.0
 **Status:** ✅ Stable - Ready for Research Use
