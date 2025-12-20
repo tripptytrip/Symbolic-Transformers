@@ -1,29 +1,23 @@
 {
+  "vocab_path": "unified_vocabulary.json",
   "vocab_size": 662,
   "config": {
-    "max_depth": 4,
-    "max_variables": 6,
-    "max_predicates": 8
+    "max_depth": 3,
+    "max_variables": 5,
+    "max_predicates": 5
   },
-  "diversity_enhancements": [
-    "Variable reuse patterns",
-    "Mixed arity predicates (1-3 args)",
-    "Nested quantifiers",
-    "Mixed connective types",
-    "Equality variations"
-  ],
   "splits": {
     "train": {
-      "formulas": 8000,
-      "samples": 129437
+      "num_formulas": 1000,
+      "num_samples": 14564
     },
     "val": {
-      "formulas": 1000,
-      "samples": 15589
+      "num_formulas": 200,
+      "num_samples": 2901
     },
     "test": {
-      "formulas": 1000,
-      "samples": 15863
+      "num_formulas": 200,
+      "num_samples": 2912
     }
   }
 }
