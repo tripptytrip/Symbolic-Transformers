@@ -1,305 +1,242 @@
 #!/usr/bin/env python3
 """
-Enhanced FOL formula generator with diversity improvements.
-
-Key tricks for more diversity:
-1. Variable reuse patterns (some formulas reuse vars, some don't)
-2. Mixed arity predicates (unary, binary, ternary)
-3. Nested quantifiers with different patterns
-4. Both prenex and non-prenex normal forms
-5. Various connective combinations
+Advanced FOL Formula Generator 2.0
+----------------------------------
+Key Improvements:
+1. Fixed Signatures: PRED_X and FUNC_X have permanent arities (consistency).
+2. Recursive Terms: Generates f(g(x), y) structure.
+3. Horn Clauses: Distinct branch for (A & B) -> C reasoning chains.
+4. Tuned Noise: Low probability shadowing/vacuous quantification.
 """
 
 import random
 import sys
 from pathlib import Path
+import json
 
-# Ensure project root is on sys.path when running as a script.
+# Ensure project root is on sys.path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from data.dataset_generator import FOLFormulaGenerator, FormulaConfig, NextSymbolDataset
 from utils.vocabulary import Vocabulary
-import json
 
-class DiverseFormulaGenerator(FOLFormulaGenerator):
-    """Enhanced generator with more diversity tricks."""
-    
+class AdvancedFormulaGenerator(FOLFormulaGenerator):
+    """
+    Generator that enforces signature consistency and adds recursive term structures.
+    """
     def __init__(self, vocab, config):
         super().__init__(vocab, config)
         
-        # Diversity settings
-        self.variable_reuse_prob = 0.7  # Probability of reusing existing variable
-        self.nested_quantifier_prob = 0.3  # Probability of nested quantifiers
-        self.mixed_connectives_prob = 0.4  # Mix different connectives
-    
+        # ---------------------------------------------------------
+        # 1. FIXED SIGNATURES
+        # ---------------------------------------------------------
+        # PRED_1 is *always* binary. FUNC_2 is *always* unary.
+        # This allows the model to learn the "identity" of symbols.
+        
+        self.pred_arities = {}
+        for i in range(config.max_predicates):
+            # 50% Binary, 40% Unary, 10% Ternary
+            self.pred_arities[i] = random.choices([1, 2, 3], weights=[0.4, 0.5, 0.1])[0]
+            
+        self.func_arities = {}
+        for i in range(config.max_functions):
+            # 70% Unary (f(x)), 30% Binary (f(x,y))
+            self.func_arities[i] = random.choices([1, 2], weights=[0.7, 0.3])[0]
+
+        # ---------------------------------------------------------
+        # 2. HYPERPARAMETERS
+        # ---------------------------------------------------------
+        self.prob_term_complexity = 0.3   # Chance a term is a function f(...) rather than var
+        self.prob_shadowing = 0.05        # LOW: Chance to reuse bound variable name (confusing)
+        self.prob_vacuous = 0.05          # LOW: Quantify variable but don't use it
+        self.prob_horn = 0.20             # MEDIUM: Generate Horn Clause structure (implication chain)
+
     def generate_formula(self, depth=0, bound_vars=None):
-        """Enhanced formula generation with diversity tricks."""
         if bound_vars is None:
             bound_vars = []
-        
-        # Base case: atomic
-        if depth >= self.config.max_depth or random.random() < 0.25:
+
+        # Hard stop on depth
+        if depth >= self.config.max_depth:
             return self.generate_atomic(bound_vars)
+
+        # Archetypes (only at root or low depth)
+        if depth == 0 and random.random() < self.prob_horn:
+            return self.generate_horn_clause(depth, bound_vars)
         
-        # Choose formula type with adjusted probabilities
-        choices = []
-        weights = []
+        # Standard recursive generation
+        # Weights: Quantifier (30%), Binary (40%), Unary (15%), Atomic (15%)
+        node_type = random.choices(
+            ['quantifier', 'binary', 'unary', 'atomic'], 
+            weights=[0.3, 0.4, 0.15, 0.15]
+        )[0]
         
-        if self.config.use_quantifiers:
-            choices.append('quantifier')
-            weights.append(0.35)  # Higher probability for quantifiers
-        
-        if self.config.use_connectives:
-            choices.append('binary_connective')
-            weights.append(0.40)
-            choices.append('unary_connective')
-            weights.append(0.15)
-        
-        choices.append('atomic')
-        weights.append(0.10)
-        
-        # Normalize weights
-        total = sum(weights)
-        weights = [w/total for w in weights]
-        
-        formula_type = random.choices(choices, weights=weights)[0]
-        
-        if formula_type == 'quantifier':
+        if node_type == 'quantifier' and self.config.use_quantifiers:
             return self.generate_quantified(depth, bound_vars)
-        elif formula_type == 'binary_connective':
-            return self.generate_binary_compound(depth, bound_vars)
-        elif formula_type == 'unary_connective':
-            return self.generate_unary_compound(depth, bound_vars)
+        elif node_type == 'binary' and self.config.use_connectives:
+            return self.generate_binary(depth, bound_vars)
+        elif node_type == 'unary' and self.config.use_connectives:
+            return self.generate_unary(depth, bound_vars)
         else:
             return self.generate_atomic(bound_vars)
-    
-    def generate_quantified(self, depth, bound_vars):
-        """Generate quantified formula with diversity."""
-        quantifier = random.choice(self.quantifiers)
+
+    # ---------------------------------------------------------
+    # NEW: Recursive Term Generation (The "Stack" Test)
+    # ---------------------------------------------------------
+    def generate_term(self, depth, bound_vars):
+        """Generates either a Variable or a Function f(t1, t2)."""
         
-        # Choose variable index
-        if bound_vars and random.random() < 0.3:
-            # Sometimes use same index as existing var (different scope)
-            var_idx = random.choice(bound_vars)
-        else:
-            var_idx = random.randint(0, self.config.max_variables - 1)
-        
-        tokens = [self.vocab.encode_label(quantifier)]
-        tokens.extend(self.generate_variable(var_idx))
-        
-        # Sometimes add nested quantifier
-        if random.random() < self.nested_quantifier_prob and depth < 2:
-            # Nested quantifier
-            inner = self.generate_quantified(depth + 1, bound_vars + [var_idx])
-        else:
-            # Regular body
-            inner = self.generate_formula(depth + 1, bound_vars + [var_idx])
-        
-        tokens.extend(inner)
-        return tokens
-    
-    def generate_binary_compound(self, depth, bound_vars):
-        """Generate binary connective with variety."""
-        # Choose connective
-        binary_connectives = ['AND', 'OR', 'IMPLIES', 'IFF']
-        
-        # Sometimes mix different connectives in left/right
-        if random.random() < self.mixed_connectives_prob:
-            connective = random.choice(binary_connectives)
-        else:
-            connective = random.choice(binary_connectives)
-        
-        tokens = [self.lparen]
-        
-        # Left side
-        left = self.generate_formula(depth + 1, bound_vars)
-        tokens.extend(left)
-        
-        tokens.append(self.vocab.encode_label(connective))
-        
-        # Right side
-        right = self.generate_formula(depth + 1, bound_vars)
-        tokens.extend(right)
-        
-        tokens.append(self.rparen)
-        return tokens
-    
-    def generate_unary_compound(self, depth, bound_vars):
-        """Generate negation."""
-        tokens = [self.vocab.encode_label('NOT')]
-        subformula = self.generate_formula(depth + 1, bound_vars)
-        tokens.extend(subformula)
-        return tokens
-    
-    def generate_atomic(self, bound_vars=None):
-        """Generate atomic with variable arity predicates."""
-        if bound_vars is None:
-            bound_vars = []
-        
-        # Decide: predicate or equality
-        if self.config.use_equality and random.random() < 0.25:
-            return self.generate_equality(bound_vars)
-        else:
-            return self.generate_predicate_varied_arity(bound_vars)
-    
-    def generate_predicate_varied_arity(self, bound_vars):
-        """Generate predicate with varied arity (1-3 arguments)."""
-        pred_idx = random.randint(0, self.config.max_predicates - 1)
-        
-        # Choose arity with weighted distribution
-        arity_choices = [1, 2, 3]
-        arity_weights = [0.5, 0.4, 0.1]  # Mostly unary and binary
-        arity = random.choices(arity_choices, weights=arity_weights)[0]
-        
-        tokens = self.vocab.encode_compositional('PRED', pred_idx)
-        tokens.append(self.lparen)
-        
-        # Generate arguments
-        var_indices = []
-        for i in range(arity):
-            if bound_vars and random.random() < self.variable_reuse_prob:
-                # Reuse bound variable
+        # Base case: Max depth reached, or random choice, or no functions available
+        use_func = (random.random() < self.prob_term_complexity)
+        if not use_func or depth > 2 or self.config.max_functions == 0:
+            # Return Variable
+            if bound_vars:
+                # 80% chance to pick recently bound var, 20% random free var (if needed)
                 var_idx = random.choice(bound_vars)
             else:
-                # New variable
                 var_idx = random.randint(0, self.config.max_variables - 1)
-            var_indices.append(var_idx)
+            return self.vocab.encode_compositional('VAR', var_idx)
         
-        # Add variables to formula
-        for i, var_idx in enumerate(var_indices):
-            tokens.extend(self.generate_variable(var_idx))
-            if i < len(var_indices) - 1:
+        # Recursive case: Function
+        func_idx = random.randint(0, self.config.max_functions - 1)
+        arity = self.func_arities[func_idx]
+        
+        tokens = self.vocab.encode_compositional('FUNC', func_idx)
+        tokens.append(self.lparen)
+        
+        for i in range(arity):
+            tokens.extend(self.generate_term(depth + 1, bound_vars))
+            if i < arity - 1:
                 tokens.append(self.comma)
         
         tokens.append(self.rparen)
         return tokens
-    
-    def generate_equality(self, bound_vars):
-        """Generate equality with variety."""
-        # Sometimes use same variable (x = x), sometimes different
-        if bound_vars and len(bound_vars) >= 2 and random.random() < 0.7:
-            var1, var2 = random.sample(bound_vars, 2)
-        elif bound_vars and random.random() < 0.3:
-            # x = x pattern
-            var1 = var2 = random.choice(bound_vars)
-        else:
-            var1 = random.randint(0, self.config.max_variables - 1)
-            var2 = random.randint(0, self.config.max_variables - 1)
+
+    def generate_atomic(self, bound_vars):
+        """Generates PRED(t1...) or t1 = t2 using recursive terms."""
         
-        tokens = self.generate_variable(var1)
+        # Equality (t1 = t2)
+        if self.config.use_equality and random.random() < 0.25:
+            tokens = self.generate_term(0, bound_vars)
+            op = 'EQUALS' if random.random() < 0.8 else 'NOT_EQUALS'
+            tokens.append(self.vocab.encode_label(op))
+            tokens.extend(self.generate_term(0, bound_vars))
+            return tokens
         
-        # Mostly use EQUALS, sometimes NOT_EQUALS
-        if random.random() < 0.8:
-            tokens.append(self.vocab.encode_label('EQUALS'))
-        else:
-            tokens.append(self.vocab.encode_label('NOT_EQUALS'))
+        # Predicate (PRED(t1, t2...))
+        pred_idx = random.randint(0, self.config.max_predicates - 1)
+        arity = self.pred_arities[pred_idx] # Use FIXED arity
         
-        tokens.extend(self.generate_variable(var2))
+        tokens = self.vocab.encode_compositional('PRED', pred_idx)
+        tokens.append(self.lparen)
+        
+        for i in range(arity):
+            tokens.extend(self.generate_term(0, bound_vars))
+            if i < arity - 1:
+                tokens.append(self.comma)
+        
+        tokens.append(self.rparen)
         return tokens
 
+    def generate_quantified(self, depth, bound_vars):
+        quantifier = random.choice(['FORALL', 'EXISTS'])
+        
+        # Shadowing check (rarely reuse an existing variable name)
+        if bound_vars and random.random() < self.prob_shadowing:
+            var_idx = random.choice(bound_vars)
+        else:
+            var_idx = random.randint(0, self.config.max_variables - 1)
+            
+        tokens = [self.vocab.encode_label(quantifier)]
+        tokens.extend(self.vocab.encode_compositional('VAR', var_idx))
+        
+        # Vacuous check (rarely don't add var to scope)
+        if random.random() < self.prob_vacuous:
+            new_bound = bound_vars # Scope doesn't change
+        else:
+            new_bound = bound_vars + [var_idx]
+            
+        tokens.extend(self.generate_formula(depth + 1, new_bound))
+        return tokens
+
+    def generate_horn_clause(self, depth, bound_vars):
+        """Generates (Atomic & Atomic) -> Atomic"""
+        num_conditions = random.randint(1, 3)
+        tokens = []
+        
+        if num_conditions > 1: tokens.append(self.lparen)
+            
+        for i in range(num_conditions):
+            tokens.extend(self.generate_atomic(bound_vars))
+            if i < num_conditions - 1:
+                tokens.append(self.vocab.encode_label('AND'))
+        
+        if num_conditions > 1: tokens.append(self.rparen)
+            
+        tokens.append(self.vocab.encode_label('IMPLIES'))
+        tokens.extend(self.generate_atomic(bound_vars))
+        return tokens
+        
+    # Standard wrappers
+    def generate_binary(self, depth, bound_vars):
+        connective = random.choice(['AND', 'OR', 'IMPLIES', 'IFF'])
+        tokens = [self.lparen]
+        tokens.extend(self.generate_formula(depth + 1, bound_vars))
+        tokens.append(self.vocab.encode_label(connective))
+        tokens.extend(self.generate_formula(depth + 1, bound_vars))
+        tokens.append(self.rparen)
+        return tokens
+
+    def generate_unary(self, depth, bound_vars):
+        tokens = [self.vocab.encode_label('NOT')]
+        tokens.extend(self.generate_formula(depth + 1, bound_vars))
+        return tokens
 
 def generate_diverse_dataset():
-    """Generate dataset with enhanced diversity."""
     print("\n" + "="*60)
-    print("GENERATING DIVERSE FOL DATASET")
+    print("GENERATING ADVANCED DIVERSE FOL DATASET (2.0)")
     print("="*60)
     
-    # Load vocab
     vocab = Vocabulary("unified_vocabulary.json")
     
-    # Enhanced config
+    # Config: Enable Functions!
     config = FormulaConfig(
-        max_depth=4,  # Allow deeper nesting
-        max_variables=6,  # More variables
-        max_predicates=8,  # More predicates
+        max_depth=5,
+        max_variables=8,
+        max_predicates=10,
+        max_functions=4, # >0 enables function generation
         use_quantifiers=True,
         use_connectives=True,
         use_equality=True
     )
     
-    # Create enhanced generator
-    generator = DiverseFormulaGenerator(vocab, config)
+    generator = AdvancedFormulaGenerator(vocab, config)
     
-    # Generate formulas
-    print("\nGenerating formulas...")
+    # Print signatures to confirm consistency
+    print(f"Fixed Predicate Arities: {generator.pred_arities}")
+    print(f"Fixed Function Arities:  {generator.func_arities}")
     
-    # Different complexity levels
-    all_formulas = []
-    
-    for complexity in range(1, 6):
-        n_for_complexity = {
-            1: 1500,  # Simple
-            2: 3500,  # Medium
-            3: 3500,  # Complex
-            4: 1000,  # Very complex
-            5: 500,   # Extremely complex
-        }[complexity]
-        
-        print(f"  Complexity {complexity}: {n_for_complexity} formulas")
-        formulas = generator.generate_batch(n_for_complexity, complexity)
-        all_formulas.extend(formulas)
-    
-    # Split into train/val/test
-    random.shuffle(all_formulas)
-    
-    n_train = 8000
-    n_val = 1000
-    n_test = 1000
-    
-    train_formulas = all_formulas[:n_train]
-    val_formulas = all_formulas[n_train:n_train+n_val]
-    test_formulas = all_formulas[n_train+n_val:n_train+n_val+n_test]
-    
-    # Create datasets
-    print("\nCreating training samples...")
-    train_dataset = NextSymbolDataset(train_formulas, max_seq_len=128)
-    val_dataset = NextSymbolDataset(val_formulas, max_seq_len=128)
-    test_dataset = NextSymbolDataset(test_formulas, max_seq_len=128)
-    
-    # Save
-    output_dir = Path("datasets/fol_next_symbol")
+    # -----------------------------------------------------
+    # Generate Splits (Standard Logic)
+    # -----------------------------------------------------
+    output_dir = Path("datasets/fol_diverse")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    train_dataset.save(str(output_dir / "train.json"))
-    val_dataset.save(str(output_dir / "val.json"))
-    test_dataset.save(str(output_dir / "test.json"))
-    
-    # Save metadata
-    metadata = {
-        'vocab_size': vocab.vocab_size,
-        'config': {
-            'max_depth': config.max_depth,
-            'max_variables': config.max_variables,
-            'max_predicates': config.max_predicates,
-        },
-        'diversity_enhancements': [
-            'Variable reuse patterns',
-            'Mixed arity predicates (1-3 args)',
-            'Nested quantifiers',
-            'Mixed connective types',
-            'Equality variations',
-        ],
-        'splits': {
-            'train': {'formulas': len(train_formulas), 'samples': len(train_dataset)},
-            'val': {'formulas': len(val_formulas), 'samples': len(val_dataset)},
-            'test': {'formulas': len(test_formulas), 'samples': len(test_dataset)},
-        }
+    splits = {
+        'train': 10000,
+        'val': 1000,
+        'test': 1000
     }
     
-    with open(output_dir / 'metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print("\n" + "="*60)
-    print("✓ DATASET GENERATION COMPLETE")
-    print("="*60)
-    print(f"\nTrain: {len(train_dataset):,} samples")
-    print(f"Val:   {len(val_dataset):,} samples")
-    print(f"Test:  {len(test_dataset):,} samples")
-    print(f"\nDiversity enhancements applied:")
-    for enh in metadata['diversity_enhancements']:
-        print(f"  ✓ {enh}")
-    print("="*60)
-
+    for split_name, n_samples in splits.items():
+        print(f"\nGenerating {split_name} ({n_samples} formulas)...")
+        formulas = generator.generate_batch(n_samples, complexity=3)
+        
+        # Convert to NextSymbolDataset
+        dataset = NextSymbolDataset(formulas, max_seq_len=128)
+        dataset.save(str(output_dir / f"{split_name}.json"))
+        
+    print(f"\n✓ Saved all datasets to {output_dir}")
 
 if __name__ == "__main__":
     generate_diverse_dataset()
+    
