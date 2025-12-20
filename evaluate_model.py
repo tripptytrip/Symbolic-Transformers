@@ -65,6 +65,9 @@ def compute_accuracy(model, samples, vocab_size, device='cpu', top_k=1):
             elif 'context' in sample:
                 context = sample['context']
                 target = sample['target']
+            elif 'input' in sample and 'target' in sample:
+                context = sample['input']
+                target = sample['target']
             else:
                 print(f"Warning: Unknown sample format: {sample.keys()}")
                 continue
@@ -169,6 +172,9 @@ def main():
             target = sample['target']
         elif 'context' in sample:
             context = sample['context']
+            target = sample['target']
+        elif 'input' in sample and 'target' in sample:
+            context = sample['input']
             target = sample['target']
         else:
             continue
