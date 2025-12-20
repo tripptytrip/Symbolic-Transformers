@@ -10,6 +10,7 @@
 
 ## Who is this for?
 
+
 - **Researchers** testing how far tiny transformers can go on formal reasoning tasks
 - **TinyML/edge developers** who need reasoning models in MBs, not GBs
 - **Educators** building interactive logic tutors or puzzle tools
@@ -24,7 +25,9 @@
 
 ## Why not just write a grammar?
 
-A grammar can tell you what strings are *syntactically valid* with 100% accuracy. This project asks a different question: **what can a tiny model learn from data beyond validity?**
+A grammar can tell you what strings are *syntactically valid* with 100% accuracy. This project asks a different question: 
+
+**what can a tiny model learn from data beyond validity?**
 
 - Frequency priors (which constructions are common vs rare)
 - Soft semantic constraints (which predicates tend to co-occur)

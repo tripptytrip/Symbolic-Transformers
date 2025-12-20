@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 print("""
-╔═══════════════════════════════════════════════════════════╗2
+╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║           FOL SYMBOLIC TRANSFORMER - QUICK START         ║
 ║                                                           ║
@@ -66,8 +66,7 @@ print("5. Exit")
 choice = input("\nEnter choice (1-5): ").strip()
 
 if choice == "1":
-    print("
-" + "="*60)
+    print("\n" + "="*60)
     print("Testing vocabulary loading...")
     print("="*60)
     
@@ -77,29 +76,24 @@ if choice == "1":
     vocab = Vocabulary("unified_vocabulary.json")
     
     # Test encoding
-    print("
-✅ Testing numeral encoding:")
+    print("\n✅ Testing numeral encoding:")
     for val in [0, 1, 24, 100]:
         token_id = vocab.encode_numeral(val)
         print(f"  {val} → token {token_id}")
     
-    print("
-✅ Testing symbol encoding:")
+    print("\n✅ Testing symbol encoding:")
     for label in ['FORALL', 'EXISTS', 'AND', 'IMPLIES']:
         token_id = vocab.encode_label(label)
         print(f"  {label} → token {token_id}")
     
-    print("
-✅ Testing compositional encoding:")
+    print("\n✅ Testing compositional encoding:")
     tokens = vocab.encode_compositional('VAR', 12)
     print(f"  VAR 12 → tokens {tokens}")
     
-    print("
-✅ Vocabulary system working correctly!")
+    print("\n✅ Vocabulary system working correctly!")
 
 elif choice == "2":
-    print("
-" + "="*60)
+    print("\n" + "="*60)
     print("Generating test dataset...")
     print("="*60)
     
@@ -120,28 +114,24 @@ elif choice == "2":
         ]
     )
     
-    print("
-✅ Test dataset generated!")
+    print("\n✅ Test dataset generated!")
     print("   Location: datasets/fol_next_symbol/")
 
 elif choice == "3":
-    print("
-" + "="*60)
+    print("\n" + "="*60)
     print("Training tiny model on CPU...")
     print("="*60)
     print("⚠️  This will take ~30 minutes on CPU")
     print("   For faster training, use GPU version")
     
-    confirm = input("
-Continue? (y/n): ").strip().lower()
+    confirm = input("\nContinue? (y/n): ").strip().lower()
     if confirm != 'y':
         print("Cancelled.")
         sys.exit(0)
     
     # Check dataset exists
     if not Path("datasets/fol_next_symbol/train.json").exists():
-        print("
-❌ Dataset not found. Run option 2 first.")
+        print("\n❌ Dataset not found. Run option 2 first.")
         sys.exit(1)
 
     with open("datasets/fol_next_symbol/train.json", 'r') as f:
@@ -170,12 +160,10 @@ Continue? (y/n): ").strip().lower()
     
     train_module.TrainingConfig = CPUTestConfig
     
-    print("
-Starting training...")
+    print("\nStarting training...")
     main()
     
-    print("
-✅ Training complete!")
+    print("\n✅ Training complete!")
     print("   Checkpoints saved to: checkpoints/")
 
 elif choice == "4":
