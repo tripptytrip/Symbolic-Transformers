@@ -12,16 +12,18 @@
 
 
 - **Researchers** testing how far tiny transformers can go on formal reasoning tasks
-- **TinyML/edge developers** who need reasoning models in MBs, not GBs
+- **TinyML/edge developers** who need reasoning, or pattern matching models in MBs, not GBs
 - **Educators** building interactive logic tutors or puzzle tools
 - **Neuro-symbolic builders** experimenting with custom symbolic alphabets
 
 ## What this is NOT (yet)
 
-- ❌ Not a full theorem prover
+- ❌ Not a full theorem prover, its very much a toy in its presant state
 - ❌ Not a verified proof pipeline (no external prover integration yet)
 - ❌ Not trained on natural language — this is formal-symbol sequence learning
 - ❌ Not claiming to replace grammars for pure syntax checking
+
+Its a personal project and something I'm exploring.
 
 ## Why not just write a grammar?
 
