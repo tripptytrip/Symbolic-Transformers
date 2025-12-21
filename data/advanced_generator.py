@@ -119,16 +119,16 @@ class AdvancedFormulaGenerator:
         # Base case: too deep, or random chance, or no functions
         if depth > 1 or random.random() > self.prob_use_function or self.config.max_functions == 0:
             # Return variable or constant
-            if random.random() < self.prob_use_constant and self.config.max_constants > 0:
+            if bound_vars and random.random() > self.prob_use_constant: # Prioritize bound vars, then constants
+                var_idx = random.choice(bound_vars)
+                return self.vocab.encode_compositional('VAR', var_idx)
+            elif self.config.max_constants > 0:
                 # Constant
                 const_idx = random.randint(0, self.config.max_constants - 1)
                 return self.vocab.encode_compositional('CONST', const_idx)
             else:
-                # Variable
-                if bound_vars:
-                    var_idx = random.choice(bound_vars)
-                else:
-                    var_idx = random.randint(0, self.config.max_variables - 1)
+                # Fallback to new variable if no bound vars or constants allowed
+                var_idx = random.randint(0, self.config.max_variables - 1)
                 return self.vocab.encode_compositional('VAR', var_idx)
         
         # Recursive: function application
@@ -139,7 +139,7 @@ class AdvancedFormulaGenerator:
         tokens.append(self.lparen)
         
         for i in range(arity):
-            tokens.extend(self.generate_term(depth + 1, bound_vars))
+            tokens.extend(self.generate_term(depth + 1, bound_vars)) # Pass through bound_vars
             if i < arity - 1:
                 tokens.append(self.comma)
         
@@ -182,9 +182,9 @@ class AdvancedFormulaGenerator:
             var_idx = random.randint(0, self.config.max_variables - 1)
         
         tokens = [self.vocab.encode_label(quantifier)]
-        tokens.extend(self.vocab.encode_compositional('VAR', var_idx))
+        tokens.extend(self.vocab.encode_compositional('VAR', var_idx)) # Encode VAR with its index
         
-        # Vacuous quantification: don't add to bound_vars
+        # Vacuous quantification: don't add to bound_vars for the subformula
         if random.random() < self.prob_vacuous:
             new_bound = bound_vars  # Body might not use this var
         else:
@@ -201,7 +201,7 @@ class AdvancedFormulaGenerator:
         num_conditions = random.randint(1, 3)
         tokens = []
         
-        if num_conditions > 1:
+        if num_conditions > 1: # Add LPAREN if multiple conditions
             tokens.append(self.lparen)
         
         for i in range(num_conditions):
@@ -209,7 +209,7 @@ class AdvancedFormulaGenerator:
             if i < num_conditions - 1:
                 tokens.append(self.vocab.encode_label('AND'))
         
-        if num_conditions > 1:
+        if num_conditions > 1: # Add RPAREN if multiple conditions
             tokens.append(self.rparen)
         
         tokens.append(self.vocab.encode_label('IMPLIES'))
@@ -236,7 +236,7 @@ class AdvancedFormulaGenerator:
     def generate_batch(self, n: int, complexity: int = 2) -> List[List[int]]:
         """Generate n formulas with given complexity (max_depth)."""
         old_depth = self.config.max_depth
-        self.config.max_depth = min(complexity + 1, 5)
+        self.config.max_depth = min(complexity + 1, 5) # Ensure depth is not too high
         
         formulas = []
         for _ in range(n):
@@ -266,7 +266,7 @@ class NextSymbolDataset:
                 prefix = formula[:i + 1]
                 target = formula[i + 1]
                 self.samples.append({
-                    'input': prefix,
+                    'context': prefix, # Changed 'input' to 'context'
                     'target': target
                 })
     
@@ -278,8 +278,9 @@ class NextSymbolDataset:
     
     def to_json(self, path: str):
         """Save samples to JSON file."""
+        # When saving, the structure needs to be compatible with FOLDataset, which expects {'samples': [...]}
         with open(path, 'w') as f:
-            json.dump(self.samples, f)
+            json.dump({'samples': self.samples}, f) # Wrap samples in a dictionary with 'samples' key
         print(f"✓ Saved {len(self.samples)} samples to {path}")
 
 
@@ -321,7 +322,7 @@ def generate_advanced_training_data(
     generator = AdvancedFormulaGenerator(vocab, config, seed=seed)
     
     # Print signature info
-    print("\n📋 Fixed Signatures (consistent across all formulas):")
+    print("\nℹ️ Fixed Signatures (consistent across all formulas):") # Replaced clipboard emoji for better compatibility
     sig_info = generator.get_signature_info()
     print(f"   Predicates: {sig_info['predicate_arities']}")
     print(f"   Functions:  {sig_info['function_arities']}")
@@ -329,7 +330,7 @@ def generate_advanced_training_data(
     # Complexity distribution (same as basic generator)
     complexity_dist = {1: 0.20, 2: 0.40, 3: 0.30, 4: 0.10}
     
-    def generate_split(n: int, name: str) -> List[Dict]:
+    def generate_split(n: int, name: str) -> NextSymbolDataset: # Return NextSymbolDataset object
         print(f"\nGenerating {name} set ({n} formulas)...")
         all_formulas = []
         
@@ -341,25 +342,17 @@ def generate_advanced_training_data(
         
         # Create dataset
         dataset = NextSymbolDataset(all_formulas, vocab)
-        return dataset.samples
+        return dataset
     
     # Generate splits
-    train_samples = generate_split(n_train, "train")
-    val_samples = generate_split(n_val, "val")
-    test_samples = generate_split(n_test, "test")
+    train_dataset = generate_split(n_train, "train")
+    val_dataset = generate_split(n_val, "val")
+    test_dataset = generate_split(n_test, "test")
     
-    # Save to JSON (wrapped in dict for train.py compatibility)
-    with open(output_path / "train.json", 'w') as f:
-        json.dump({'samples': train_samples}, f)
-    print(f"✓ Saved {len(train_samples)} samples to {output_path}/train.json")
-    
-    with open(output_path / "val.json", 'w') as f:
-        json.dump({'samples': val_samples}, f)
-    print(f"✓ Saved {len(val_samples)} samples to {output_path}/val.json")
-    
-    with open(output_path / "test.json", 'w') as f:
-        json.dump({'samples': test_samples}, f)
-    print(f"✓ Saved {len(test_samples)} samples to {output_path}/test.json")
+    # Save to JSON (using the to_json method which now wraps samples in 'samples' key)
+    train_dataset.to_json(output_path / "train.json")
+    val_dataset.to_json(output_path / "val.json")
+    test_dataset.to_json(output_path / "test.json")
     
     # Save metadata
     metadata = {
@@ -372,9 +365,9 @@ def generate_advanced_training_data(
             'max_constants': config.max_constants,
         },
         'signatures': sig_info,
-        'n_train': len(train_samples),
-        'n_val': len(val_samples),
-        'n_test': len(test_samples),
+        'n_train': len(train_dataset), # Use dataset length for accurate count
+        'n_val': len(val_dataset),   # Use dataset length for accurate count
+        'n_test': len(test_dataset),  # Use dataset length for accurate count
         'seed': seed,
     }
     
@@ -384,9 +377,9 @@ def generate_advanced_training_data(
     print("\n" + "=" * 60)
     print("✓ Advanced dataset generation complete!")
     print(f"✓ Output directory: {output_dir}")
-    print(f"✓ Train samples: {len(train_samples)}")
-    print(f"✓ Val samples: {len(val_samples)}")
-    print(f"✓ Test samples: {len(test_samples)}")
+    print(f"✓ Train samples: {len(train_dataset)}") # Use dataset length for accurate count
+    print(f"✓ Val samples: {len(val_dataset)}")   # Use dataset length for accurate count
+    print(f"✓ Test samples: {len(test_dataset)}")  # Use dataset length for accurate count
     print("=" * 60)
 
 
