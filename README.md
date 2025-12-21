@@ -326,7 +326,7 @@ Symbolic-Transformers/
 
 ```bibtex
 @software{symbolic_transformers_2025,
-  author = {Tom Weaver},
+  author = {Michael Kerr},
   title = {Symbolic Transformers: Tiny Models for First-Order Logic 
            with Compositional Token Design},
   year = {2025},
