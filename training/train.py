@@ -95,7 +95,7 @@ class FOLDataset(Dataset):
         sample = self.samples[idx]
         
         # Get context and target
-        context = sample['input']
+        context = sample['context']
         target = sample['target']
         
         # Pad context to max_seq_len
