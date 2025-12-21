@@ -9,15 +9,15 @@
   "splits": {
     "train": {
       "num_formulas": 1000,
-      "num_samples": 14564
+      "num_samples": 14512
     },
     "val": {
       "num_formulas": 200,
-      "num_samples": 2901
+      "num_samples": 2783
     },
     "test": {
       "num_formulas": 200,
-      "num_samples": 2912
+      "num_samples": 3003
     }
   }
 }
