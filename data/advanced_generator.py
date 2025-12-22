@@ -21,8 +21,8 @@ class FormulaConfig:
     def __init__(
         self,
         max_depth: int = 4,
-        max_variables: int = 8,
-        max_predicates: int = 10,
+        max_variables: int = 100,
+        max_predicates: int = 100,
         max_functions: int = 4,
         max_constants: int = 5,
         use_quantifiers: bool = True,

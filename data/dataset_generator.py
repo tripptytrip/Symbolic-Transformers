@@ -18,8 +18,8 @@ from utils.vocabulary import Vocabulary
 class FormulaConfig:
     """Configuration for formula generation."""
     max_depth: int = 3
-    max_variables: int = 5
-    max_predicates: int = 5
+    max_variables: int = 100
+    max_predicates: int = 100
     max_functions: int = 3
     use_quantifiers: bool = True
     use_connectives: bool = True
