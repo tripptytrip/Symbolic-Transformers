@@ -286,8 +286,8 @@ def generate_advanced_training_data(
     
     config = FormulaConfig(
         max_depth=4,
-        max_variables=8,
-        max_predicates=10,
+        max_variables=100,
+        max_predicates=100,
         max_functions=4,
         max_constants=5,
         use_quantifiers=True,
