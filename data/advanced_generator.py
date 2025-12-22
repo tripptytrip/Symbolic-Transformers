@@ -1,263 +1,233 @@
 #!/usr/bin/env python3
 """
-Advanced FOL formula generator with richer structure.
-CORRECTED: Fixed context length safety check and vocabulary validation.
+Advanced FOL Formula Generator (Depth-Balanced Edition)
+replaces previous generator with a robust, target-depth strategy
+to cure "depth blindness" in symbolic transformers.
 """
 
 import random
 import json
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple
 import sys
+from pathlib import Path
+from typing import List, Dict, Optional, Tuple, Union
+from dataclasses import dataclass, asdict
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.vocabulary import Vocabulary
 
+# Increase recursion limit for deep formula generation
+sys.setrecursionlimit(2000)
 
+@dataclass
 class FormulaConfig:
     """Configuration for formula generation."""
-    def __init__(
-        self,
-        max_depth: int = 4,
-        max_variables: int = 100,
-        max_predicates: int = 100,
-        max_functions: int = 4,
-        max_constants: int = 5,
-        use_quantifiers: bool = True,
-        use_connectives: bool = True,
-        use_equality: bool = True,
-    ):
-        self.max_depth = max_depth
-        self.max_variables = max_variables
-        self.max_predicates = max_predicates
-        self.max_functions = max_functions
-        self.max_constants = max_constants
-        self.use_quantifiers = use_quantifiers
-        self.use_connectives = use_connectives
-        self.use_equality = use_equality
-
+    min_depth: int = 1
+    max_depth: int = 10          # Target max depth
+    max_variables: int = 100
+    max_predicates: int = 50
+    max_functions: int = 4
+    max_constants: int = 5
+    
+    # Structural Toggles
+    use_quantifiers: bool = True
+    use_connectives: bool = True
+    use_equality: bool = True
+    
+    # Probability tunings
+    prob_shadowing: float = 0.05
+    prob_vacuous: float = 0.05  
 
 class AdvancedFormulaGenerator:
     """
-    Generates FOL formulas with functions, fixed signatures, and structural patterns.
+    Generates FOL formulas with forced depth targeting to ensure
+    uniform distribution of recursive structures.
     """
-    
     def __init__(self, vocab: Vocabulary, config: FormulaConfig, seed: Optional[int] = None):
         self.vocab = vocab
         self.config = config
         
         if seed is not None:
             random.seed(seed)
-        
-        # Cache common token IDs
-        self.lparen = vocab.encode_label('LPAREN')
-        self.rparen = vocab.encode_label('RPAREN')
-        self.comma = vocab.encode_label('COMMA')
+            
+        # Cache token IDs
+        self.tokens = {
+            'LPAREN': vocab.encode_label('LPAREN'),
+            'RPAREN': vocab.encode_label('RPAREN'),
+            'COMMA': vocab.encode_label('COMMA'),
+            'NOT': vocab.encode_label('NOT'),
+            'AND': vocab.encode_label('AND'),
+            'OR': vocab.encode_label('OR'),
+            'IMPLIES': vocab.encode_label('IMPLIES'),
+            'IFF': vocab.encode_label('IFF'),
+            'FORALL': vocab.encode_label('FORALL'),
+            'EXISTS': vocab.encode_label('EXISTS'),
+            'EQUALS': vocab.encode_label('EQUALS'),
+            'NOT_EQUALS': vocab.encode_label('NOT_EQUALS'),
+        }
 
-        # Check for optional tokens in vocabulary to prevent crashes
+        # Capability checks
         self.has_funcs = 'FUNC' in vocab.compositional_tokens
         self.has_consts = 'CONST' in vocab.compositional_tokens
         
-        if not self.has_funcs and config.max_functions > 0:
-            print("⚠️ Warning: FUNC tokens not in vocabulary. Disabling functions.")
-            self.config.max_functions = 0
-            
-        if not self.has_consts and config.max_constants > 0:
-            print("⚠️ Warning: CONST tokens not in vocabulary. Disabling constants.")
-            self.config.max_constants = 0
+        # Initialize Fixed Signatures (Arity Maps)
+        self.pred_arities = {i: random.choices([1, 2, 3], weights=[0.4, 0.5, 0.1])[0] 
+                             for i in range(config.max_predicates)}
         
-        # 1. Fixed Signature Consistency
-        self.pred_arities = {}
-        for i in range(config.max_predicates):
-            self.pred_arities[i] = random.choices([1, 2, 3], weights=[0.4, 0.5, 0.1])[0]
+        self.func_arities = {i: random.choices([1, 2], weights=[0.8, 0.2])[0] 
+                             for i in range(config.max_functions)}
         
-        self.func_arities = {}
-        for i in range(config.max_functions):
-            self.func_arities[i] = random.choices([1, 2], weights=[0.7, 0.3])[0]
-        
-        # Diversity probabilities
-        self.prob_use_function = 0.25
-        self.prob_vacuous = 0.05
-        self.prob_shadowing = 0.05
-        self.prob_horn_clause = 0.20
-        self.prob_use_constant = 0.15
-    
-    def generate_formula(self, depth: int = 0, bound_vars: Optional[List[int]] = None) -> List[int]:
-        if bound_vars is None:
-            bound_vars = []
-        
-        if depth >= self.config.max_depth:
-            return self.generate_atomic(bound_vars)
-        
-        r = random.random()
-        
-        if depth == 0 and r < self.prob_horn_clause:
-            return self.generate_horn_clause(depth, bound_vars)
-        
-        choices = ['quantifier', 'binary', 'unary', 'atomic']
-        weights = [0.30, 0.40, 0.15, 0.15]
-        
-        mode = random.choices(choices, weights=weights)[0]
-        
-        if mode == 'quantifier' and self.config.use_quantifiers:
-            return self.generate_quantified(depth, bound_vars)
-        elif mode == 'binary' and self.config.use_connectives:
-            return self.generate_binary(depth, bound_vars)
-        elif mode == 'unary' and self.config.use_connectives:
-            return self.generate_unary(depth, bound_vars)
-        else:
-            return self.generate_atomic(bound_vars)
-    
-    def generate_term(self, depth: int, bound_vars: List[int]) -> List[int]:
-        # Base case: too deep, or random chance, or no functions
-        if depth > 1 or random.random() > self.prob_use_function or self.config.max_functions == 0:
-            if bound_vars and random.random() > self.prob_use_constant:
-                var_idx = random.choice(bound_vars)
-                return self.vocab.encode_compositional('VAR', var_idx)
-            elif self.config.max_constants > 0:
-                const_idx = random.randint(0, self.config.max_constants - 1)
-                return self.vocab.encode_compositional('CONST', const_idx)
-            else:
-                var_idx = random.randint(0, self.config.max_variables - 1)
-                return self.vocab.encode_compositional('VAR', var_idx)
-        
+    def get_signature_info(self) -> Dict:
+        """Return arity maps for logging."""
+        return {
+            'predicate_arities': self.pred_arities,
+            'function_arities': self.func_arities,
+        }
+
+    def _generate_variable(self, bound_vars: List[int]) -> List[int]:
+        if bound_vars and random.random() < 0.90:
+            return self.vocab.encode_compositional('VAR', random.choice(bound_vars))
+        return self.vocab.encode_compositional('VAR', random.randint(0, self.config.max_variables - 1))
+
+    def _generate_term(self, current_depth: int, max_term_depth: int, bound_vars: List[int]) -> List[int]:
+        if current_depth >= max_term_depth or not self.has_funcs or random.random() < 0.4:
+            if self.has_consts and random.random() < 0.2:
+                idx = random.randint(0, self.config.max_constants - 1)
+                return self.vocab.encode_compositional('CONST', idx)
+            return self._generate_variable(bound_vars)
+
         func_idx = random.randint(0, self.config.max_functions - 1)
         arity = self.func_arities[func_idx]
         
         tokens = self.vocab.encode_compositional('FUNC', func_idx)
-        tokens.append(self.lparen)
-        
+        tokens.append(self.tokens['LPAREN'])
         for i in range(arity):
-            tokens.extend(self.generate_term(depth + 1, bound_vars))
+            tokens.extend(self._generate_term(current_depth + 1, max_term_depth, bound_vars))
             if i < arity - 1:
-                tokens.append(self.comma)
-        
-        tokens.append(self.rparen)
+                tokens.append(self.tokens['COMMA'])
+        tokens.append(self.tokens['RPAREN'])
         return tokens
-    
-    def generate_atomic(self, bound_vars: List[int]) -> List[int]:
-        if self.config.use_equality and random.random() < 0.20:
-            tokens = self.generate_term(0, bound_vars)
-            op = 'EQUALS' if random.random() < 0.8 else 'NOT_EQUALS'
-            tokens.append(self.vocab.encode_label(op))
-            tokens.extend(self.generate_term(0, bound_vars))
+
+    def _generate_atomic(self, bound_vars: List[int]) -> List[int]:
+        if self.config.use_equality and random.random() < 0.2:
+            left = self._generate_term(0, 2, bound_vars)
+            op = self.tokens['EQUALS'] if random.random() > 0.1 else self.tokens['NOT_EQUALS']
+            right = self._generate_term(0, 2, bound_vars)
+            return left + [op] + right
+
+        pred_idx = random.randint(0, self.config.max_predicates - 1)
+        arity = self.pred_arities[pred_idx]
+        
+        tokens = self.vocab.encode_compositional('PRED', pred_idx)
+        tokens.append(self.tokens['LPAREN'])
+        for i in range(arity):
+            tokens.extend(self._generate_term(0, 2, bound_vars))
+            if i < arity - 1:
+                tokens.append(self.tokens['COMMA'])
+        tokens.append(self.tokens['RPAREN'])
+        return tokens
+
+    def generate_formula(self, current_depth: int, target_depth: int, bound_vars: List[int]) -> List[int]:
+        """Recursive generation attempting to hit target_depth."""
+        if current_depth >= target_depth:
+            return self._generate_atomic(bound_vars)
+
+        options = ['QUANT', 'BINARY', 'NOT']
+        weights = [0.35, 0.50, 0.15]
+        choice = random.choices(options, weights=weights)[0]
+
+        if choice == 'NOT':
+            tokens = [self.tokens['NOT']]
+            tokens.extend(self.generate_formula(current_depth + 1, target_depth, bound_vars))
             return tokens
-        else:
-            pred_idx = random.randint(0, self.config.max_predicates - 1)
-            arity = self.pred_arities[pred_idx]
-            
-            tokens = self.vocab.encode_compositional('PRED', pred_idx)
-            tokens.append(self.lparen)
-            
-            for i in range(arity):
-                tokens.extend(self.generate_term(0, bound_vars))
-                if i < arity - 1:
-                    tokens.append(self.comma)
-            
-            tokens.append(self.rparen)
-            return tokens
-    
-    def generate_quantified(self, depth: int, bound_vars: List[int]) -> List[int]:
-        quantifier = random.choice(['FORALL', 'EXISTS'])
-        
-        if bound_vars and random.random() < self.prob_shadowing:
-            var_idx = random.choice(bound_vars)
-        else:
-            var_idx = random.randint(0, self.config.max_variables - 1)
-        
-        tokens = [self.vocab.encode_label(quantifier)]
-        tokens.extend(self.vocab.encode_compositional('VAR', var_idx))
-        
-        if random.random() < self.prob_vacuous:
+
+        elif choice == 'QUANT':
+            quant = self.tokens['FORALL'] if random.random() < 0.5 else self.tokens['EXISTS']
+            if bound_vars and random.random() < self.config.prob_shadowing:
+                var_idx = random.choice(bound_vars)
+            else:
+                var_idx = random.randint(0, self.config.max_variables - 1)
+                
+            tokens = [quant] + self.vocab.encode_compositional('VAR', var_idx)
             new_bound = bound_vars
-        else:
-            new_bound = bound_vars + [var_idx]
+            if random.random() > self.config.prob_vacuous:
+                new_bound = bound_vars + [var_idx]
+                
+            tokens.extend(self.generate_formula(current_depth + 1, target_depth, new_bound))
+            return tokens
+
+        elif choice == 'BINARY':
+            op = random.choice([self.tokens['AND'], self.tokens['OR'], self.tokens['IMPLIES'], self.tokens['IFF']])
+            
+            # One branch must handle the depth growth
+            deep_branch = self.generate_formula(current_depth + 1, target_depth, bound_vars)
+            
+            # The other can be random length (up to target)
+            other_target = random.randint(current_depth + 1, target_depth)
+            other_branch = self.generate_formula(current_depth + 1, other_target, bound_vars)
+            
+            if random.random() < 0.5:
+                left, right = deep_branch, other_branch
+            else:
+                left, right = other_branch, deep_branch
+                
+            return [self.tokens['LPAREN']] + left + [op] + right + [self.tokens['RPAREN']]
+
+        return self._generate_atomic(bound_vars)
+
+    def generate_batch(self, n_samples: int, complexity: int = 0) -> List[Dict]:
+        """
+        Generates a balanced batch.
+        Args:
+            n_samples: Total samples to generate
+            complexity: (Ignored in this version, uses config.max_depth range)
+        """
+        samples = []
+        depth_range = range(self.config.min_depth, self.config.max_depth + 1)
+        samples_per_depth = int(n_samples / len(depth_range))
         
-        tokens.extend(self.generate_formula(depth + 1, new_bound))
-        return tokens
-    
-    def generate_horn_clause(self, depth: int, bound_vars: List[int]) -> List[int]:
-        num_conditions = random.randint(1, 3)
-        tokens = []
+        for d in depth_range:
+            for _ in range(samples_per_depth):
+                tokens = self.generate_formula(0, d, [])
+                samples.append({
+                    'tokens': tokens,
+                    'meta_depth': d
+                })
         
-        if num_conditions > 1:
-            tokens.append(self.lparen)
-        
-        for i in range(num_conditions):
-            tokens.extend(self.generate_atomic(bound_vars))
-            if i < num_conditions - 1:
-                tokens.append(self.vocab.encode_label('AND'))
-        
-        if num_conditions > 1:
-            tokens.append(self.rparen)
-        
-        tokens.append(self.vocab.encode_label('IMPLIES'))
-        tokens.extend(self.generate_atomic(bound_vars))
-        
-        return tokens
-    
-    def generate_binary(self, depth: int, bound_vars: List[int]) -> List[int]:
-        connective = random.choice(['AND', 'OR', 'IMPLIES', 'IFF'])
-        tokens = [self.lparen]
-        tokens.extend(self.generate_formula(depth + 1, bound_vars))
-        tokens.append(self.vocab.encode_label(connective))
-        tokens.extend(self.generate_formula(depth + 1, bound_vars))
-        tokens.append(self.rparen)
-        return tokens
-    
-    def generate_unary(self, depth: int, bound_vars: List[int]) -> List[int]:
-        tokens = [self.vocab.encode_label('NOT')]
-        tokens.extend(self.generate_formula(depth + 1, bound_vars))
-        return tokens
-    
-    def generate_batch(self, n: int, complexity: int = 2) -> List[List[int]]:
-        old_depth = self.config.max_depth
-        self.config.max_depth = min(complexity + 1, 5)
-        
-        formulas = []
-        for _ in range(n):
-            formulas.append(self.generate_formula())
-        
-        self.config.max_depth = old_depth
-        return formulas
-    
-    def get_signature_info(self) -> Dict:
-        return {
-            'predicate_arities': self.pred_arities.copy(),
-            'function_arities': self.func_arities.copy(),
-        }
+        # Fill remainder
+        while len(samples) < n_samples:
+            d = random.choice(depth_range)
+            tokens = self.generate_formula(0, d, [])
+            samples.append({'tokens': tokens, 'meta_depth': d})
+            
+        random.shuffle(samples)
+        return samples
 
 
 class NextSymbolDataset:
-    """Creates next-symbol prediction samples from formulas."""
-    
-    def __init__(self, formulas: List[List[int]], vocab: Vocabulary, max_seq_len: int = 128):
-        self.vocab = vocab
+    """Wrapper to format data for training."""
+    def __init__(self, formulas_with_meta: List[Dict], vocab: Vocabulary, max_seq_len: int = 128):
         self.samples = []
         
-        for formula in formulas:
-            # SAFETY FIX: Ensure we don't generate samples where context exceeds max_seq_len
-            # because train.py will truncate the context but keep the remote target,
-            # creating a gap in logic.
-            limit = min(len(formula) - 1, max_seq_len)
+        for entry in formulas_with_meta:
+            formula = entry['tokens']
+            meta_depth = entry['meta_depth']
             
-            for i in range(limit):
-                prefix = formula[:i + 1]
-                target = formula[i + 1]
+            if len(formula) > max_seq_len + 1:
+                continue
+                
+            for i in range(1, len(formula)):
+                context = formula[:i]
+                target = formula[i]
+                
                 self.samples.append({
-                    'context': prefix,
-                    'target': target
+                    'context': context,
+                    'target': target,
+                    'depth': meta_depth # Added metadata key
                 })
-    
-    def __len__(self):
-        return len(self.samples)
-    
-    def __getitem__(self, idx):
-        return self.samples[idx]
-    
-    def to_json(self, path: str):
+                
+    def to_json(self, path: Path):
         with open(path, 'w') as f:
             json.dump({'samples': self.samples}, f)
         print(f"✓ Saved {len(self.samples)} samples to {path}")
@@ -265,93 +235,57 @@ class NextSymbolDataset:
 
 def generate_advanced_training_data(
     vocab_path: str = "unified_vocabulary.json",
-    output_dir: str = "datasets/fol_next_symbol",
-    n_train: int = 10000,
-    n_val: int = 1000,
-    n_test: int = 500,
+    output_dir: str = "datasets/fol_next_symbol", # Original output dir
+    n_train: int = 15000,
+    n_val: int = 2000,
+    n_test: int = 1000,
     seed: int = 42,
 ):
-    print("=" * 60)
-    print("ADVANCED FOL DATASET GENERATION")
-    print("=" * 60)
+    print("="*60)
+    print("BALANCED DEPTH FOL GENERATION")
+    print("="*60)
     
     try:
         vocab = Vocabulary(vocab_path)
     except FileNotFoundError:
-        print(f"❌ Error: Vocabulary file not found at {vocab_path}")
+        print(f"❌ Vocabulary not found at {vocab_path}")
         return
-    
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    config = FormulaConfig(
-        max_depth=4,
-        max_variables=100,
-        max_predicates=100,
-        max_functions=4,
-        max_constants=5,
-        use_quantifiers=True,
-        use_connectives=True,
-        use_equality=True,
-    )
-    
-    generator = AdvancedFormulaGenerator(vocab, config, seed=seed)
-    
-    print("\nℹ️ Fixed Signatures:")
-    sig_info = generator.get_signature_info()
-    print(f"   Predicates: {sig_info['predicate_arities']}")
-    print(f"   Functions:  {sig_info['function_arities']}")
-    
-    complexity_dist = {1: 0.20, 2: 0.40, 3: 0.30, 4: 0.10}
-    
-    def generate_split(n: int, name: str) -> NextSymbolDataset:
-        print(f"\nGenerating {name} set ({n} formulas)...")
-        all_formulas = []
-        
-        for complexity, fraction in complexity_dist.items():
-            count = int(n * fraction)
-            print(f"  Complexity {complexity}: {count} formulas")
-            formulas = generator.generate_batch(count, complexity=complexity)
-            all_formulas.extend(formulas)
-        
-        dataset = NextSymbolDataset(all_formulas, vocab, max_seq_len=128)
-        return dataset
-    
-    train_dataset = generate_split(n_train, "train")
-    val_dataset = generate_split(n_val, "val")
-    test_dataset = generate_split(n_test, "test")
-    
-    train_dataset.to_json(output_path / "train.json")
-    val_dataset.to_json(output_path / "val.json")
-    test_dataset.to_json(output_path / "test.json")
-    
-    metadata = {
-        'generator': 'advanced',
-        'config': {
-            'max_depth': config.max_depth,
-            'max_variables': config.max_variables,
-            'max_predicates': config.max_predicates,
-        },
-        'signatures': sig_info,
-        'n_train': len(train_dataset),
-        'n_val': len(val_dataset),
-        'n_test': len(test_dataset),
-        'seed': seed,
-    }
-    
-    with open(output_path / "metadata.json", 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print("\n" + "=" * 60)
-    print("✓ Advanced dataset generation complete!")
-    print(f"✓ Output directory: {output_dir}")
-    print(f"✓ Train samples: {len(train_dataset)}")
-    print("=" * 60)
 
+    # Use max_depth=10 to force the model to learn counting
+    config = FormulaConfig(max_depth=10) 
+    generator = AdvancedFormulaGenerator(vocab, config, seed)
+    
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    
+    # Generate Splits
+    print(f"\nGenerating TRAIN ({n_train})...")
+    train_raw = generator.generate_batch(n_train)
+    train_ds = NextSymbolDataset(train_raw, vocab, max_seq_len=256)
+    train_ds.to_json(out_path / "train.json")
+    
+    print(f"\nGenerating VAL ({n_val})...")
+    val_raw = generator.generate_batch(n_val)
+    val_ds = NextSymbolDataset(val_raw, vocab, max_seq_len=256)
+    val_ds.to_json(out_path / "val.json")
+    
+    print(f"\nGenerating TEST ({n_test})...")
+    test_raw = generator.generate_batch(n_test)
+    test_ds = NextSymbolDataset(test_raw, vocab, max_seq_len=256)
+    test_ds.to_json(out_path / "test.json")
+    
+    # Save Metadata
+    metadata = {
+        'generator': 'balanced_depth',
+        'config': asdict(config),
+        'signatures': generator.get_signature_info(),
+        'n_train': len(train_ds.samples),
+        'n_val': len(val_ds.samples)
+    }
+    with open(out_path / "metadata.json", 'w') as f:
+        json.dump(metadata, f, indent=2)
+        
+    print("\n✓ Generation Complete.")
 
 if __name__ == "__main__":
-    generate_advanced_training_data(
-        n_train=10000,
-        n_val=1000,
-        n_test=1000,
-    )
+    generate_advanced_training_data()
