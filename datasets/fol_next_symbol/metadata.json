@@ -1,6 +1,8 @@
 {
+  "generator": "basic_with_boundaries_v1",
   "vocab_path": "unified_vocabulary.json",
-  "vocab_size": 662,
+  "vocab_size": 671,
+  "uses_boundaries": true,
   "config": {
     "max_depth": 3,
     "max_variables": 5,
@@ -8,16 +10,16 @@
   },
   "splits": {
     "train": {
-      "num_formulas": 1000,
-      "num_samples": 14512
+      "num_formulas": 10000,
+      "num_samples": 163614
     },
     "val": {
-      "num_formulas": 200,
-      "num_samples": 2783
+      "num_formulas": 1000,
+      "num_samples": 15664
     },
     "test": {
-      "num_formulas": 200,
-      "num_samples": 3003
+      "num_formulas": 1000,
+      "num_samples": 16748
     }
   }
 }
