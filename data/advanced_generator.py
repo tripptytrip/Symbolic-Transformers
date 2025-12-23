@@ -308,7 +308,7 @@ class AdvancedFormulaGenerator:
 class NextSymbolDataset:
     """Wrapper to format data for Next Token Prediction training with message boundaries."""
     def __init__(self, formulas_with_meta: List[Dict], vocab: Vocabulary, 
-                 max_seq_len: int = 256, use_boundaries: bool = True):
+                 max_seq_len: int = 512, use_boundaries: bool = True):
         self.samples = []
         skipped_count = 0
         
@@ -414,17 +414,17 @@ def generate_advanced_training_data(
     # Generate Splits
     print(f"\nGenerating TRAIN ({n_train})...")
     train_raw = generator.generate_batch(n_train)
-    train_ds = NextSymbolDataset(train_raw, vocab, max_seq_len=256, use_boundaries=use_boundaries)
+    train_ds = NextSymbolDataset(train_raw, vocab, max_seq_len=512, use_boundaries=use_boundaries)
     train_ds.to_json(out_path / "train.json")
     
     print(f"\nGenerating VAL ({n_val})...")
     val_raw = generator.generate_batch(n_val)
-    val_ds = NextSymbolDataset(val_raw, vocab, max_seq_len=256, use_boundaries=use_boundaries)
+    val_ds = NextSymbolDataset(val_raw, vocab, max_seq_len=512, use_boundaries=use_boundaries)
     val_ds.to_json(out_path / "val.json")
     
     print(f"\nGenerating TEST ({n_test})...")
     test_raw = generator.generate_batch(n_test)
-    test_ds = NextSymbolDataset(test_raw, vocab, max_seq_len=256, use_boundaries=use_boundaries)
+    test_ds = NextSymbolDataset(test_raw, vocab, max_seq_len=512, use_boundaries=use_boundaries)
     test_ds.to_json(out_path / "test.json")
     
     # Save Metadata

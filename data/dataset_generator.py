@@ -236,7 +236,7 @@ class NextSymbolDataset:
         self, 
         formulas: List[List[int]],
         vocab: Vocabulary,
-        max_seq_len: int = 128,
+        max_seq_len: int = 512,
         use_boundaries: bool = True
     ):
         """
@@ -409,7 +409,7 @@ def generate_training_data(
             formulas.extend(batch)
             print(f"  Complexity {complexity}: {n_for_complexity} formulas")
         
-        dataset = NextSymbolDataset(formulas, vocab, max_seq_len=128, use_boundaries=use_boundaries)
+        dataset = NextSymbolDataset(formulas, vocab, max_seq_len=512, use_boundaries=use_boundaries)
         
         output_path = output_dir / f"{split_name}.json"
         dataset.save(str(output_path))

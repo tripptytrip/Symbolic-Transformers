@@ -55,7 +55,7 @@ class TrainingConfig:
     weight_decay: float = 0.01
     warmup_steps: int = 2000
     max_grad_norm: float = 1.0
-    max_seq_len: int = 128
+    max_seq_len: int = 512
     train_data_path: str = "datasets/fol_next_symbol/train.json"
     val_data_path: str = "datasets/fol_next_symbol/val.json"
     checkpoint_dir: str = "checkpoints"
@@ -68,7 +68,7 @@ class TrainingConfig:
 class FOLDataset(Dataset):
     """PyTorch Dataset for FOL next-symbol prediction."""
     
-    def __init__(self, data_path: str, max_seq_len: int = 128):
+    def __init__(self, data_path: str, max_seq_len: int = 512):
         with open(data_path, 'r') as f:
             data = json.load(f)
         
