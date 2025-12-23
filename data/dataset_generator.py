@@ -1,5 +1,5 @@
 """
-FOL Formula Dataset Generator
+FOL Formula Dataset Generator (with MESSAGE boundaries)
 Generates training data for next-symbol prediction on FOL formulas.
 """
 
@@ -25,6 +25,7 @@ class FormulaConfig:
     use_connectives: bool = True
     use_equality: bool = True
     use_arithmetic: bool = False  # For future extension
+    use_message_boundaries: bool = True  # NEW: Control MESSAGE_START/END
 
 
 class FOLFormulaGenerator:
@@ -41,6 +42,16 @@ class FOLFormulaGenerator:
     def __init__(self, vocab: Vocabulary, config: FormulaConfig):
         self.vocab = vocab
         self.config = config
+        
+        # Check if MESSAGE_START/MESSAGE_END are available
+        self.has_boundaries = (
+            vocab.has_special_token('MESSAGE_START') and 
+            vocab.has_special_token('MESSAGE_END')
+        )
+        
+        if config.use_message_boundaries and not self.has_boundaries:
+            print("⚠ Warning: MESSAGE_START/MESSAGE_END not in vocabulary, disabling boundaries")
+            config.use_message_boundaries = False
         
         # Get token IDs for generation
         self.connectives = ['NOT', 'AND', 'OR', 'IMPLIES', 'IFF']
@@ -215,40 +226,76 @@ class FOLFormulaGenerator:
 
 class NextSymbolDataset:
     """
-    Dataset for next-symbol prediction task.
+    Dataset for next-symbol prediction task with MESSAGE boundaries.
     
     Given a formula prefix, predict the next token.
-    Example: [FORALL, VAR, 1, PRED] → next token should be a predicate index
+    Example: [MESSAGE_START, FORALL, VAR, 1, PRED] → next token
     """
     
     def __init__(
         self, 
-        formulas: List[List[int]], 
-        max_seq_len: int = 128
+        formulas: List[List[int]],
+        vocab: Vocabulary,
+        max_seq_len: int = 128,
+        use_boundaries: bool = True
     ):
         """
         Create dataset from formula token sequences.
         
         Args:
-            formulas: List of token sequences
+            formulas: List of token sequences (without boundaries)
+            vocab: Vocabulary instance
             max_seq_len: Maximum sequence length
+            use_boundaries: Whether to wrap formulas with MESSAGE_START/END
         """
         self.formulas = formulas
         self.max_seq_len = max_seq_len
         self.samples = []
         
+        # Check if boundaries are available
+        has_boundaries = (
+            vocab.has_special_token('MESSAGE_START') and 
+            vocab.has_special_token('MESSAGE_END')
+        )
+        
+        if use_boundaries and not has_boundaries:
+            print("⚠ Warning: MESSAGE_START/MESSAGE_END not available, proceeding without boundaries")
+            use_boundaries = False
+        
+        skipped_count = 0
+        
         # Create training samples: (context, target) pairs
         for formula in formulas:
-            # Create samples at each position
-            for i in range(1, min(len(formula), max_seq_len)):
-                context = formula[:i]
-                target = formula[i]
+            # Wrap with message boundaries if enabled
+            if use_boundaries:
+                full_formula = [vocab.message_start] + formula + [vocab.message_end]
+            else:
+                full_formula = formula
+            
+            # Skip if too long
+            if len(full_formula) > max_seq_len:
+                skipped_count += 1
+                continue
+            
+            # Create samples at each position INCLUDING MESSAGE_END as target
+            for i in range(1, len(full_formula)):
+                context = full_formula[:i]
+                target = full_formula[i]
                 
                 self.samples.append({
                     'context': context,
                     'target': target,
                     'formula_len': len(formula)
                 })
+        
+        if skipped_count > 0:
+            print(f"⚠ Warning: Skipped {skipped_count} formulas exceeding max_seq_len ({max_seq_len})")
+        
+        # Report boundary usage
+        if use_boundaries and self.samples:
+            boundary_samples = sum(1 for s in self.samples 
+                                 if s['target'] in [vocab.message_start, vocab.message_end])
+            print(f"✓ Generated {len(self.samples)} samples ({boundary_samples} boundary targets)")
     
     def __len__(self) -> int:
         return len(self.samples)
@@ -264,7 +311,7 @@ class NextSymbolDataset:
                 'num_samples': len(self.samples),
                 'max_seq_len': self.max_seq_len,
                 'samples': self.samples
-            }, f, indent=2)
+            }, f)
         print(f"✓ Saved {len(self.samples)} samples to {output_path}")
     
     @staticmethod
@@ -291,7 +338,8 @@ def generate_training_data(
     n_train: int = 10000,
     n_val: int = 1000,
     n_test: int = 1000,
-    complexity_distribution: Optional[List[Tuple[int, float]]] = None
+    complexity_distribution: Optional[List[Tuple[int, float]]] = None,
+    use_boundaries: bool = True
 ):
     """
     Generate complete training/validation/test datasets.
@@ -303,16 +351,31 @@ def generate_training_data(
         n_val: Number of validation formulas
         n_test: Number of test formulas
         complexity_distribution: List of (complexity, weight) tuples
+        use_boundaries: Whether to wrap formulas with MESSAGE_START/END
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print("="*60)
-    print("FOL DATASET GENERATION")
+    print("FOL DATASET GENERATION (BASIC with MESSAGE BOUNDARIES)")
     print("="*60)
     
     # Load vocabulary
     vocab = Vocabulary(vocab_path)
+    
+    # Check boundary availability
+    has_boundaries = (
+        vocab.has_special_token('MESSAGE_START') and 
+        vocab.has_special_token('MESSAGE_END')
+    )
+    
+    if use_boundaries and not has_boundaries:
+        print("⚠ Warning: MESSAGE_START/MESSAGE_END not in vocabulary")
+        print("   Run update_vocabulary_complete.py first!")
+        print("   Proceeding without boundaries...")
+        use_boundaries = False
+    elif use_boundaries:
+        print(f"✓ Using MESSAGE_START (ID {vocab.message_start}) and MESSAGE_END (ID {vocab.message_end})")
     
     # Setup generator
     config = FormulaConfig(
@@ -321,7 +384,8 @@ def generate_training_data(
         max_predicates=5,
         use_quantifiers=True,
         use_connectives=True,
-        use_equality=True
+        use_equality=True,
+        use_message_boundaries=use_boundaries
     )
     generator = FOLFormulaGenerator(vocab, config)
     
@@ -345,7 +409,7 @@ def generate_training_data(
             formulas.extend(batch)
             print(f"  Complexity {complexity}: {n_for_complexity} formulas")
         
-        dataset = NextSymbolDataset(formulas, max_seq_len=128)
+        dataset = NextSymbolDataset(formulas, vocab, max_seq_len=128, use_boundaries=use_boundaries)
         
         output_path = output_dir / f"{split_name}.json"
         dataset.save(str(output_path))
@@ -359,8 +423,10 @@ def generate_training_data(
     
     # Save metadata
     metadata = {
+        'generator': 'basic_with_boundaries_v1',
         'vocab_path': vocab_path,
         'vocab_size': vocab.vocab_size,
+        'uses_boundaries': use_boundaries,
         'config': {
             'max_depth': config.max_depth,
             'max_variables': config.max_variables,
@@ -383,21 +449,24 @@ def generate_training_data(
     print(f"✓ Train samples: {len(train_dataset)}")
     print(f"✓ Val samples: {len(val_dataset)}")
     print(f"✓ Test samples: {len(test_dataset)}")
+    if use_boundaries:
+        print(f"✓ Message boundaries: ENABLED")
     print("="*60)
 
 
 if __name__ == "__main__":
     # Example usage
     generate_training_data(
-        vocab_path="../../unified_vocabulary.json",
-        output_dir="../../datasets/fol_next_symbol",
-        n_train=1000,
-        n_val=200,
-        n_test=200,
+        vocab_path="unified_vocabulary.json",
+        output_dir="datasets/fol_next_symbol",
+        n_train=10000,
+        n_val=1000,
+        n_test=1000,
         complexity_distribution=[
             (1, 0.2),  # 20% simple
             (2, 0.4),  # 40% medium
             (3, 0.3),  # 30% complex
             (4, 0.1),  # 10% very complex
-        ]
+        ],
+        use_boundaries=True  # NEW: Enable MESSAGE_START/END
     )

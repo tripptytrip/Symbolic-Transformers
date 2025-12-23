@@ -1,9 +1,9 @@
 """
-Symbolic Transformer Demo with Structural Benchmarks
+Symbolic Transformer Demo with Structural Benchmarks (Phase 1.1 - with MESSAGE boundaries)
 
 Integrated demo that includes:
 1. Interactive prediction explorer
-2. Structural benchmark suite
+2. Structural benchmark suite (including message boundaries)
 3. Visual result display
 
 Usage:
@@ -30,6 +30,43 @@ from models.transformer import create_model
 # ============================================================
 
 BENCHMARKS = {
+    
+    "message_boundaries": {
+        "name": "Message Boundaries (NEW)",
+        "description": "Tests that MESSAGE_START/MESSAGE_END tokens work correctly for formula termination",
+        "tests": [
+            {
+                "input": "MESSAGE_START PRED 0 LPAREN VAR 0 RPAREN",
+                "expected": "MESSAGE_END",
+                "expected_min": 60,
+                "rationale": "Complete formula with balanced parens should end with MESSAGE_END"
+            },
+            {
+                "input": "MESSAGE_START FORALL VAR 0 PRED 0 LPAREN VAR 0 RPAREN",
+                "expected": "MESSAGE_END",
+                "expected_min": 60,
+                "rationale": "Complete quantified formula should end with MESSAGE_END"
+            },
+            {
+                "input": "MESSAGE_START LPAREN PRED 0 LPAREN VAR 0 RPAREN",
+                "expected_one_of": ["AND", "OR", "IMPLIES", "IFF"],
+                "message_end_max": 5,
+                "rationale": "Unbalanced parens - MESSAGE_END should be very unlikely"
+            },
+            {
+                "input": "MESSAGE_START",
+                "expected_one_of": ["PRED", "LPAREN", "FORALL", "EXISTS", "NOT"],
+                "message_end_max": 5,
+                "rationale": "After MESSAGE_START, formula must begin (MESSAGE_END impossible)"
+            },
+            {
+                "input": "MESSAGE_START LPAREN PRED 0 LPAREN VAR 0 RPAREN AND PRED 1 LPAREN VAR 1 RPAREN RPAREN",
+                "expected": "MESSAGE_END",
+                "expected_min": 70,
+                "rationale": "Complex formula with all parens balanced should strongly predict MESSAGE_END"
+            }
+        ]
+    },
     
     "deterministic": {
         "name": "Deterministic Structure",
@@ -85,10 +122,10 @@ BENCHMARKS = {
                 "rationale": "After binding a variable, can start body: predicate, group, nested quantifier, negation"
             },
             {
-                "input": "FORALL VAR 0 PRED 0 LPAREN VAR 0 RPAREN",
-                "expected_one_of": ["AND", "OR", "IMPLIES", "IFF"],
-                "expected_max": 40,
-                "rationale": "Complete formula can extend with any connective"
+                "input": "MESSAGE_START FORALL VAR 0 PRED 0 LPAREN VAR 0 RPAREN",
+                "expected_one_of": ["MESSAGE_END", "AND", "OR", "IMPLIES", "IFF"],
+                "message_end_min": 40,
+                "rationale": "Complete formula can end or extend - MESSAGE_END should be strong option"
             },
             {
                 "input": "LPAREN PRED 1 LPAREN VAR 0 RPAREN",
@@ -144,10 +181,9 @@ BENCHMARKS = {
                 "rationale": "Two levels of nesting - still one unclosed outer paren"
             },
             {
-                "input": "PRED 0 LPAREN VAR 0 RPAREN AND PRED 1 LPAREN VAR 1 RPAREN",
-                "expected_one_of": ["AND", "OR", "IMPLIES", "IFF"],
-                "rparen_max": 15,
-                "rationale": "All parens balanced - RPAREN should be LOW probability"
+                "input": "MESSAGE_START PRED 0 LPAREN VAR 0 RPAREN AND PRED 1 LPAREN VAR 1 RPAREN",
+                "expected_one_of": ["MESSAGE_END", "AND", "OR", "IMPLIES", "IFF"],
+                "rationale": "All parens balanced with MESSAGE_START - should strongly prefer MESSAGE_END or connectives"
             }
         ]
     },
@@ -242,6 +278,11 @@ BENCHMARKS = {
                 "input": "LPAREN RPAREN",
                 "observational": True,
                 "rationale": "Empty parens - what continuation does model expect?"
+            },
+            {
+                "input": "MESSAGE_START MESSAGE_END",
+                "observational": True,
+                "rationale": "Empty message - what does model predict?"
             }
         ]
     }
@@ -260,6 +301,16 @@ if not os.path.exists('unified_vocabulary.json'):
 vocab = Vocabulary('unified_vocabulary.json')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Check if MESSAGE_START/MESSAGE_END are available
+HAS_MESSAGE_BOUNDARIES = vocab.has_special_token('MESSAGE_START') and vocab.has_special_token('MESSAGE_END')
+
+if not HAS_MESSAGE_BOUNDARIES:
+    print("⚠ Warning: MESSAGE_START/MESSAGE_END not in vocabulary")
+    print("   Message boundary tests will be skipped")
+    # Remove message boundary category
+    if "message_boundaries" in BENCHMARKS:
+        del BENCHMARKS["message_boundaries"]
+
 if not os.path.exists('checkpoints/best_model.pt'):
     raise FileNotFoundError("checkpoints/best_model.pt not found")
 
@@ -273,6 +324,8 @@ model.eval()
 print(f"✓ Vocabulary loaded: {vocab.vocab_size} tokens")
 print(f"✓ Model loaded: {config['model_size']} configuration")
 print(f"✓ Device: {device}")
+if HAS_MESSAGE_BOUNDARIES:
+    print(f"✓ Message boundaries: MESSAGE_START ({vocab.message_start}), MESSAGE_END ({vocab.message_end})")
 
 
 # ============================================================
@@ -395,6 +448,17 @@ def run_single_test(test: Dict) -> Dict:
             result["passed"] = result["passed"] and max_prob <= test["expected_max"]
             result["detail"] += f" (max <= {test['expected_max']}%: {max_prob:.1f}%)"
         
+        # NEW: MESSAGE_END specific checks
+        if "message_end_min" in test:
+            msg_end_prob = predictions.get("MESSAGE_END", 0)
+            result["passed"] = result["passed"] and msg_end_prob >= test["message_end_min"]
+            result["detail"] += f" (MESSAGE_END >= {test['message_end_min']}%: {msg_end_prob:.1f}%)"
+        
+        if "message_end_max" in test:
+            msg_end_prob = predictions.get("MESSAGE_END", 0)
+            result["passed"] = result["passed"] and msg_end_prob <= test["message_end_max"]
+            result["detail"] += f" (MESSAGE_END <= {test['message_end_max']}%: {msg_end_prob:.1f}%)"
+        
         if "rparen_min" in test:
             rparen_prob = predictions.get("RPAREN", 0)
             result["passed"] = result["passed"] and rparen_prob >= test["rparen_min"]
@@ -512,6 +576,12 @@ def run_all_benchmarks() -> Tuple[str, str]:
     summary = f"# 📊 Benchmark Summary\n\n"
     summary += f"**Timestamp:** {timestamp}\n\n"
     summary += f"**Pass Rate:** {pass_rate:.1f}% ({total_passed}/{total_tests})\n\n"
+    
+    if HAS_MESSAGE_BOUNDARIES:
+        summary += f"**Message Boundaries:** ✅ Enabled (MESSAGE_START ID: {vocab.message_start}, MESSAGE_END ID: {vocab.message_end})\n\n"
+    else:
+        summary += f"**Message Boundaries:** ❌ Not available in vocabulary\n\n"
+    
     summary += "| Metric | Count |\n|--------|-------|\n"
     summary += f"| ✅ Passed | {total_passed} |\n"
     summary += f"| ❌ Failed | {total_failed} |\n"
@@ -529,10 +599,13 @@ def run_all_benchmarks() -> Tuple[str, str]:
     
     # Detailed results
     detailed = "=" * 60 + "\n"
-    detailed += "SYMBOLIC TRANSFORMER STRUCTURAL BENCHMARKS\n"
+    detailed += "SYMBOLIC TRANSFORMER STRUCTURAL BENCHMARKS (v1.1)\n"
     detailed += "=" * 60 + "\n"
     detailed += f"Timestamp: {timestamp}\n"
-    detailed += f"Pass Rate: {pass_rate:.1f}% ({total_passed}/{total_tests})\n\n"
+    detailed += f"Pass Rate: {pass_rate:.1f}% ({total_passed}/{total_tests})\n"
+    if HAS_MESSAGE_BOUNDARIES:
+        detailed += f"Message Boundaries: ENABLED\n"
+    detailed += "\n"
     
     for category_key, data in all_results.items():
         detailed += "-" * 60 + "\n"
@@ -575,6 +648,13 @@ EXAMPLES = [
     ["FORALL VAR 0 LPAREN PRED 0 LPAREN VAR 0 RPAREN IMPLIES PRED 1 LPAREN VAR 0 RPAREN"],
 ]
 
+if HAS_MESSAGE_BOUNDARIES:
+    EXAMPLES.extend([
+        ["MESSAGE_START"],
+        ["MESSAGE_START PRED 0 LPAREN VAR 0 RPAREN"],
+        ["MESSAGE_START FORALL VAR 0 PRED 0 LPAREN VAR 0 RPAREN"],
+    ])
+
 
 # ============================================================
 # GRADIO INTERFACE
@@ -582,13 +662,15 @@ EXAMPLES = [
 
 with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as demo:
     
-    gr.Markdown("""
-    # 🧠 Symbolic Transformer Phase 1
+    boundary_status = "✅ With MESSAGE Boundaries" if HAS_MESSAGE_BOUNDARIES else "⚠️ Without MESSAGE Boundaries"
+    
+    gr.Markdown(f"""
+    # 🧠 Symbolic Transformer Phase 1.1
     
     Interactive explorer for the FOL syntax model with structural benchmarks.
     
-    **Model:** {model_size} configuration | **Vocab:** {vocab_size} tokens | **Device:** {device}
-    """.format(model_size=config['model_size'], vocab_size=vocab.vocab_size, device=device))
+    **Model:** {config['model_size']} configuration | **Vocab:** {vocab.vocab_size} tokens | **Device:** {device} | **Status:** {boundary_status}
+    """)
     
     with gr.Tabs():
         
@@ -600,13 +682,15 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
             Type a First-Order Logic formula prefix to see what the model predicts next.
             
             **Examples:** `FORALL` → VAR | `PRED 3` → LPAREN | `NOT` → distributed
+            
+            **With MESSAGE boundaries:** Try `MESSAGE_START PRED 0 LPAREN VAR 0 RPAREN` to see termination
             """)
             
             with gr.Row():
                 with gr.Column(scale=2):
                     input_text = gr.Textbox(
                         label="Input Context",
-                        placeholder="e.g., FORALL VAR 0 PRED 1 LPAREN",
+                        placeholder="e.g., MESSAGE_START FORALL VAR 0 PRED 1 LPAREN VAR 0 RPAREN",
                         lines=1
                     )
                     gr.Examples(
@@ -631,12 +715,18 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
         # TAB 2: Structural Benchmarks
         # ============================================================
         with gr.TabItem("📊 Structural Benchmarks"):
-            gr.Markdown("""
+            benchmark_intro = """
             ## Structural Benchmark Suite
             
             These tests verify that the model has learned FOL syntax rules, not just pattern matching.
             
             **Categories:**
+            """
+            
+            if HAS_MESSAGE_BOUNDARIES:
+                benchmark_intro += "- **Message Boundaries (NEW)**: Tests MESSAGE_START/MESSAGE_END termination\n"
+            
+            benchmark_intro += """
             - **Deterministic Structure**: Hard constraints (expect ~100%)
             - **Calibrated Uncertainty**: Appropriate distribution across valid options
             - **Predicate Arity**: Learned unary vs binary distribution
@@ -645,13 +735,15 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
             - **Nested Quantifiers**: Multiple levels of quantification
             - **Implication Structure**: Antecedent → consequent understanding
             - **Edge Cases**: Observational tests for unusual inputs
-            """)
+            """
+            
+            gr.Markdown(benchmark_intro)
             
             with gr.Row():
                 category_dropdown = gr.Dropdown(
                     choices=[(v["name"], k) for k, v in BENCHMARKS.items()],
                     label="Select Category",
-                    value="deterministic"
+                    value="message_boundaries" if HAS_MESSAGE_BOUNDARIES else "deterministic"
                 )
                 run_category_btn = gr.Button("Run Category", variant="primary")
                 run_all_btn = gr.Button("Run All Benchmarks", variant="secondary")
@@ -690,10 +782,10 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
         # TAB 4: About
         # ============================================================
         with gr.TabItem("ℹ️ About"):
-            gr.Markdown(f"""
+            about_text = f"""
             ## About This Demo
             
-            This is the **Symbolic Transformer Phase 1** demo - a {config['model_size']} parameter model
+            This is the **Symbolic Transformer Phase 1.1** demo - a {config['model_size']} parameter model
             that has learned First-Order Logic syntax through next-token prediction.
             
             ### Key Capabilities Demonstrated
@@ -705,12 +797,29 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
             | Calibrated Uncertainty | Model knows when multiple options are valid |
             | Parenthesis Tracking | Maintains structural state across sequence |
             | Compositional Generalisation | VAR 0 and VAR 624 treated identically |
+            """
+            
+            if HAS_MESSAGE_BOUNDARIES:
+                about_text += f"""| **Message Boundaries (NEW)** | MESSAGE_START/MESSAGE_END mark formula completion |
+            """
+            
+            about_text += f"""
             
             ### Model Details
             
             - **Configuration**: {config['model_size']}
             - **Vocabulary**: {vocab.vocab_size} tokens
             - **Device**: {device}
+            """
+            
+            if HAS_MESSAGE_BOUNDARIES:
+                about_text += f"""- **Message Boundaries**: ✅ Enabled (START: {vocab.message_start}, END: {vocab.message_end})
+            """
+            else:
+                about_text += """- **Message Boundaries**: ❌ Not in vocabulary (retrain with updated data generator)
+            """
+            
+            about_text += """
             
             ### What's Next
             
@@ -723,7 +832,9 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
             ---
             
             *Built with compositional tokenization and careful thinking about what it means to reason.*
-            """)
+            """
+            
+            gr.Markdown(about_text)
 
 
 # ============================================================
@@ -732,6 +843,10 @@ with gr.Blocks(title="Symbolic Transformer Demo", theme=gr.themes.Soft()) as dem
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
-    print("🚀 Launching Symbolic Transformer Demo with Benchmarks")
+    print("🚀 Launching Symbolic Transformer Demo with Benchmarks (v1.1)")
+    if HAS_MESSAGE_BOUNDARIES:
+        print("✓ Message boundary tests ENABLED")
+    else:
+        print("⚠ Message boundary tests DISABLED (not in vocabulary)")
     print("=" * 60 + "\n")
     demo.launch(share=True)
