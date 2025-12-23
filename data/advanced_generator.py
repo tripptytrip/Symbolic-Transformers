@@ -56,6 +56,10 @@ class FormulaConfig:
     prob_standalone_atom: float = 0.15
     prob_early_termination: float = 0.20
     prob_wrapped_atom: float = 0.10
+    # Phase 1.1: Additional structural diversity for benchmark fixes
+    prob_redundant_paren: float = 0.15      # Wrap sub-formulas in extra ((parens))
+    prob_right_branching: float = 0.20      # Force right-heavy trees: A & (B & (C & D))
+    equality_bias_multiplier: float = 2.0   # Increase equality (ends with =, not ))
 
 class AdvancedFormulaGenerator:
     """
@@ -153,7 +157,9 @@ class AdvancedFormulaGenerator:
         """Generates an atomic formula (Equality or Predicate)."""
         term_depth_limit = self.config.max_term_depth
 
-        if self.config.use_equality and random.random() < 0.25:
+        # Apply equality bias multiplier to break RPAREN-ending correlation
+        equality_threshold = 0.25 * self.config.equality_bias_multiplier
+        if self.config.use_equality and random.random() < equality_threshold:
             left = self._generate_term(0, term_depth_limit, bound_vars)
             op = self.tokens['EQUALS'] if random.random() > 0.1 else self.tokens['NOT_EQUALS']
             right = self._generate_term(0, term_depth_limit, bound_vars)
@@ -169,6 +175,23 @@ class AdvancedFormulaGenerator:
             if i < arity - 1:
                 tokens.append(self.tokens['COMMA'])
         tokens.append(self.tokens['RPAREN'])
+        return tokens
+
+    def _maybe_wrap_redundant_parens(self, tokens: List[int]) -> List[int]:
+        """
+        Randomly wrap formula in redundant parentheses to decouple parens from logical structure.
+
+        Examples:
+        - P(x) → ((P(x))) or (((P(x))))
+        - (A & B) → (((A & B)))
+
+        This teaches the model that parenthesis depth is independent of formula complexity.
+        """
+        if random.random() < self.config.prob_redundant_paren:
+            # Add 1-3 layers of redundant parens
+            num_layers = random.randint(1, 3)
+            for _ in range(num_layers):
+                tokens = [self.tokens['LPAREN']] + tokens + [self.tokens['RPAREN']]
         return tokens
 
     def generate_formula(self, current_depth: int, target_depth: int, bound_vars: List[int]) -> List[int]:
@@ -220,15 +243,29 @@ class AdvancedFormulaGenerator:
             op = random.choice([self.tokens['AND'], self.tokens['OR'], 
                                self.tokens['IMPLIES'], self.tokens['IFF']])
             
-            deep_branch = self.generate_formula(current_depth + 1, target_depth, bound_vars)
-            other_target = random.randint(current_depth + 1, target_depth)
-            other_branch = self.generate_formula(current_depth + 1, other_target, bound_vars)
-            
-            if random.random() < 0.5:
-                left, right = deep_branch, other_branch
+            # Right-branching bias: creates deep tails like (A & (B & (C & D)))
+            # This generates sequences of )))) to train parenthesis counting
+            if random.random() < self.config.prob_right_branching:
+                # Short left branch (shallow)
+                left_target = random.randint(current_depth + 1, min(current_depth + 2, target_depth))
+                left = self.generate_formula(current_depth + 1, left_target, bound_vars)
+
+                # Deep right branch (goes to full target depth)
+                right = self.generate_formula(current_depth + 1, target_depth, bound_vars)
+
+                # Sometimes add redundant parens to right branch for extra noise
+                right = self._maybe_wrap_redundant_parens(right)
             else:
-                left, right = other_branch, deep_branch
-                
+                # Original balanced tree approach
+                deep_branch = self.generate_formula(current_depth + 1, target_depth, bound_vars)
+                other_target = random.randint(current_depth + 1, target_depth)
+                other_branch = self.generate_formula(current_depth + 1, other_target, bound_vars)
+
+                if random.random() < 0.5:
+                    left, right = deep_branch, other_branch
+                else:
+                    left, right = other_branch, deep_branch
+
             return [self.tokens['LPAREN']] + left + [op] + right + [self.tokens['RPAREN']]
 
         return self._generate_atomic(bound_vars)
@@ -243,6 +280,8 @@ class AdvancedFormulaGenerator:
         n_standalone = int(n_samples * self.config.prob_standalone_atom)
         for _ in range(n_standalone):
             tokens = self._generate_atomic([])
+            # Apply redundant parens to some standalone atoms
+            tokens = self._maybe_wrap_redundant_parens(tokens)
             samples.append({
                 'tokens': tokens,
                 'meta_depth': 0,
@@ -404,7 +443,11 @@ def generate_advanced_training_data(
         use_message_boundaries=use_boundaries,
         prob_standalone_atom=0.15,
         prob_early_termination=0.20,
-        prob_wrapped_atom=0.10
+        prob_wrapped_atom=0.10,
+        # Structural diversity parameters for benchmark fixes
+        prob_redundant_paren=0.15,
+        prob_right_branching=0.20,
+        equality_bias_multiplier=2.0
     )
     generator = AdvancedFormulaGenerator(vocab, config, seed)
     
@@ -429,7 +472,7 @@ def generate_advanced_training_data(
     
     # Save Metadata
     metadata = {
-        'generator': 'advanced_with_boundaries_v3',
+        'generator': 'advanced_structural_diversity_v4',
         'config': asdict(config),
         'signatures': generator.get_signature_info(),
         'n_train': len(train_ds.samples),
