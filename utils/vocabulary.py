@@ -10,11 +10,13 @@ from typing import List, Dict, Optional, Union
 
 class Vocabulary:
     """
-    Unified vocabulary for base-625 numerals + FOL symbols.
+    Unified vocabulary for base-625 numerals + FOL symbols + special tokens.
     
     Vocabulary structure:
     - IDs 0-624: Numeral symbols (positional encoding in 25x25 grid)
-    - IDs 625+: FOL operator symbols (NOT, AND, OR, VAR, PRED, etc.)
+    - IDs 625-661: FOL operator symbols (NOT, AND, OR, VAR, PRED, etc.)
+    - IDs 662-665: Special tokens (MESSAGE_START, MESSAGE_END, PAD, UNK)
+    - IDs 666+: Phase 2 reasoning tokens (SEP, QUERY, ANSWER, END, UNKNOWN)
     """
     
     def __init__(self, vocab_path: str):
@@ -33,6 +35,12 @@ class Vocabulary:
         self.numeral_range = tuple(self.vocab['numeral_range'])
         self.symbol_range = tuple(self.vocab['symbol_range'])
         
+        # Special token range (Phase 1: MESSAGE_START, MESSAGE_END, PAD, UNK)
+        if 'special_token_range' in self.vocab:
+            self.special_token_range = tuple(self.vocab['special_token_range'])
+        else:
+            self.special_token_range = None
+        
         # Create lookups
         self.label_to_id = self.vocab['label_to_id']
         self.id_to_label = {int(k): v for k, v in self.vocab['id_to_label'].items()}
@@ -40,17 +48,60 @@ class Vocabulary:
         # Token metadata
         self.tokens = {t['id']: t for t in self.vocab['tokens']}
         
-        # Special tokens
+        # Special tokens dictionary (all special tokens from JSON)
+        self.special_tokens = self.vocab.get('special_tokens', {})
+        
+        # Phase 1 special tokens (message boundaries)
+        self.message_start = self.special_tokens.get('MESSAGE_START')
+        self.message_end = self.special_tokens.get('MESSAGE_END')
+        self.pad_token = self.special_tokens.get('PAD')
+        self.unk_token = self.special_tokens.get('UNK')
+        
+        # Phase 2 special tokens (reasoning tasks)
+        # These may not exist yet, so use get() with None default
+        self.sep_token = self.label_to_id.get('SEP')
+        self.query_token = self.label_to_id.get('QUERY')
+        self.answer_token = self.label_to_id.get('ANSWER')
+        self.end_token = self.label_to_id.get('END')
+        self.unknown_token = self.label_to_id.get('UNKNOWN')
+        
+        # Compositional tokens (VAR, PRED, FUNC, CONST, SORT)
         self.compositional_tokens = {
             token['label']: token['id']
             for token in self.vocab['tokens']
             if token.get('compositional', False)
         }
         
+        # Print summary
         print(f"✓ Vocabulary loaded: {self.vocab_size} tokens")
         print(f"  - Numerals: {self.numeral_range[0]}-{self.numeral_range[1]}")
         print(f"  - Symbols: {self.symbol_range[0]}-{self.symbol_range[1]}")
+        if self.special_token_range:
+            print(f"  - Special: {self.special_token_range[0]}-{self.special_token_range[1]}")
         print(f"  - Compositional: {list(self.compositional_tokens.keys())}")
+        
+        # Report Phase 1 special tokens
+        phase1_tokens = [
+            ('MESSAGE_START', self.message_start),
+            ('MESSAGE_END', self.message_end),
+            ('PAD', self.pad_token),
+            ('UNK', self.unk_token)
+        ]
+        available_phase1 = [name for name, token_id in phase1_tokens if token_id is not None]
+        if available_phase1:
+            print(f"  - Phase 1 tokens: {', '.join(available_phase1)}")
+        
+        # Report Phase 2 special tokens
+        phase2_tokens = [
+            ('SEP', self.sep_token),
+            ('QUERY', self.query_token),
+            ('ANSWER', self.answer_token),
+            ('END', self.end_token),
+            ('UNKNOWN', self.unknown_token)
+        ]
+        available_phase2 = [name for name, token_id in phase2_tokens if token_id is not None]
+        if available_phase2:
+            print(f"  - Phase 2 tokens: {', '.join(available_phase2)}")
     
     def encode_label(self, label: str) -> int:
         """Convert label to token ID."""
@@ -180,6 +231,44 @@ class Vocabulary:
         """Check if token ID is a compositional category token."""
         return token_id in self.compositional_tokens.values()
     
+    def is_special(self, token_id: int) -> bool:
+        """Check if token ID is a special token (Phase 1 or Phase 2)."""
+        # Check if in special token range
+        if self.special_token_range is not None:
+            if self.special_token_range[0] <= token_id <= self.special_token_range[1]:
+                return True
+        
+        # Also check Phase 2 tokens (they may be outside the original special range)
+        phase2_ids = [
+            self.sep_token, self.query_token, self.answer_token, 
+            self.end_token, self.unknown_token
+        ]
+        return token_id in [tid for tid in phase2_ids if tid is not None]
+    
+    def get_special_token(self, name: str) -> Optional[int]:
+        """
+        Get special token ID by name.
+        
+        Args:
+            name: Token name (e.g., 'MESSAGE_START', 'SEP', 'QUERY')
+            
+        Returns:
+            Token ID or None if not found
+        """
+        # Check Phase 1 special tokens dict first
+        if name in self.special_tokens:
+            return self.special_tokens[name]
+        
+        # Check Phase 2 tokens in label_to_id
+        if name in self.label_to_id:
+            return self.label_to_id[name]
+        
+        return None
+    
+    def has_special_token(self, name: str) -> bool:
+        """Check if a special token exists in vocabulary."""
+        return self.get_special_token(name) is not None
+    
     def get_token_info(self, token_id: int) -> Dict:
         """Get full token metadata."""
         if token_id not in self.tokens:
@@ -234,6 +323,24 @@ class Vocabulary:
                 labels.append(self.decode_id(token_id))
         
         return " ".join(labels)
+    
+    def wrap_with_boundaries(self, formula_tokens: List[int]) -> List[int]:
+        """
+        Wrap formula tokens with MESSAGE_START and MESSAGE_END.
+        
+        Args:
+            formula_tokens: Token sequence without boundaries
+            
+        Returns:
+            Token sequence wrapped with MESSAGE_START and MESSAGE_END
+            
+        Raises:
+            ValueError: If MESSAGE_START or MESSAGE_END not available
+        """
+        if self.message_start is None or self.message_end is None:
+            raise ValueError("MESSAGE_START and MESSAGE_END tokens not available in vocabulary")
+        
+        return [self.message_start] + formula_tokens + [self.message_end]
 
 
 class FormulaEncoder:
@@ -259,6 +366,19 @@ class FormulaEncoder:
             List of token IDs
         """
         return self.vocab.encode_formula_simple(formula)
+    
+    def encode_with_boundaries(self, formula: str) -> List[int]:
+        """
+        Encode formula and wrap with MESSAGE_START/MESSAGE_END.
+        
+        Args:
+            formula: Formula string
+            
+        Returns:
+            Token sequence with boundaries
+        """
+        tokens = self.encode(formula)
+        return self.vocab.wrap_with_boundaries(tokens)
 
 
 class FormulaDecoder:
@@ -324,6 +444,32 @@ if __name__ == "__main__":
         decoded_cat, decoded_idx, _ = vocab.decode_compositional(tokens, 0)
         print(f"  {category} {index} → tokens {tokens} → {decoded_cat} {decoded_idx} ✓")
     
+    # Test Phase 1 special tokens
+    print("\n" + "="*60)
+    print("Testing Phase 1 special tokens:")
+    phase1_tokens = ['MESSAGE_START', 'MESSAGE_END', 'PAD', 'UNK']
+    for token_name in phase1_tokens:
+        token_id = vocab.get_special_token(token_name)
+        if token_id is not None:
+            is_special = vocab.is_special(token_id)
+            decoded = vocab.decode_id(token_id)
+            print(f"  {token_name} → token {token_id} → {decoded} (special: {is_special}) ✓")
+        else:
+            print(f"  {token_name} → NOT FOUND (may not be in vocabulary yet)")
+    
+    # Test Phase 2 special tokens
+    print("\n" + "="*60)
+    print("Testing Phase 2 special tokens:")
+    phase2_tokens = ['SEP', 'QUERY', 'ANSWER', 'END', 'UNKNOWN']
+    for token_name in phase2_tokens:
+        token_id = vocab.get_special_token(token_name)
+        if token_id is not None:
+            is_special = vocab.is_special(token_id)
+            decoded = vocab.decode_id(token_id)
+            print(f"  {token_name} → token {token_id} → {decoded} (special: {is_special}) ✓")
+        else:
+            print(f"  {token_name} → NOT FOUND (may not be in vocabulary yet)")
+    
     # Test simple formula encoding
     print("\n" + "="*60)
     print("Testing formula encoding:")
@@ -334,6 +480,20 @@ if __name__ == "__main__":
     decoded = vocab.decode_formula_simple(tokens)
     print(f"Decoded: {decoded}")
     print(f"Match: {formula == decoded} ✓")
+    
+    # Test boundary wrapping (if MESSAGE_START/MESSAGE_END exist)
+    print("\n" + "="*60)
+    print("Testing formula with message boundaries:")
+    if vocab.message_start is not None and vocab.message_end is not None:
+        formula_tokens = vocab.encode_formula_simple("PRED 0 LPAREN VAR 0 RPAREN")
+        wrapped = vocab.wrap_with_boundaries(formula_tokens)
+        decoded_wrapped = vocab.decode_formula_simple(wrapped)
+        print(f"Original: PRED 0 LPAREN VAR 0 RPAREN")
+        print(f"Wrapped tokens: {wrapped}")
+        print(f"Decoded with boundaries: {decoded_wrapped}")
+        print("✓ Boundary tokens work correctly")
+    else:
+        print("⚠ MESSAGE_START/MESSAGE_END not in vocabulary - skipping boundary test")
     
     print("\n" + "="*60)
     print("✓ All vocabulary tests passed!")
